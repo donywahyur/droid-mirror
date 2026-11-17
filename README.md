@@ -43,7 +43,22 @@ pnpm tauri dev
 pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
 ```
 
-## Controls
+## Using it
+
+- **Connect screen:** each device is a card showing how it's reached: *USB*,
+  *Wi-Fi* or *Tailscale*, plus its address. Problems such as "Allow USB
+  debugging on the phone" or "Offline" appear underneath. Click a card to
+  mirror it. USB cards have a **Wi-Fi** button (`adb tcpip 5555`), and wireless
+  cards have **✕** to disconnect. *Add a device by address* connects or pairs by
+  ip:port. Quality and *Turn phone screen off* are remembered.
+- **Mirror view:** the phone fills the window, with nothing on top of it. A
+  thin top bar holds the window buttons, the device name (drag it to move the
+  window), and fps and delay. A column on the right is always visible: Back,
+  Home, Recents, volume, power, rotate, notifications, phone screen off,
+  📌 keep on top, and ■ stop.
+- **Window:** when mirroring starts, the window resizes to the phone's shape
+  (plus the bar and column). It resizes again on rotation, and goes back to
+  its previous size when you stop.
 
 | Input | Action |
 | --- | --- |
@@ -59,8 +74,9 @@ pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
 
 ## Phone screen off
 
-The 📱/📴 toggle in the bottom bar keeps the phone's own screen dark while you
-use it from the Mac. Turn it on before pressing *Mirror*. The setting is remembered.
+*Turn phone screen off* on the connect screen (or 📴 in the mirror view's
+control column) keeps the phone's own screen dark while you use it from the
+Mac. Turn it on before you start mirroring. The setting is remembered.
 
 - If the phone is locked, its screen stays on until you unlock it (from the
   Mac or by hand), then turns off. Android puts a locked phone back to sleep
@@ -81,11 +97,12 @@ can press its power button and get in unlocked.
 
 - **Android 11+ wireless debugging:** phones with Wireless debugging on are
   found automatically on the local network (adb mDNS) and listed as
-  "found on network". Pressing *Mirror* connects first. A phone that was never
-  paired with this Mac needs *Wi-Fi → Pair* once (pairing ip:port and code).
-- **USB first:** select the USB device, then click *Wi-Fi → Switch selected USB
-  device to Wi-Fi*. This runs `adb tcpip 5555` and then `adb connect <ip>:5555`.
-  After that you can unplug the cable.
+  "found on network". Clicking the card connects first. A phone that was never
+  paired with this Mac needs *Add a device by address → Pair* once (pairing
+  ip:port and code).
+- **USB first:** click **Wi-Fi** on the phone's USB card. This runs
+  `adb tcpip 5555` and then `adb connect <ip>:5555`. After that you can unplug
+  the cable.
 
 Wireless debugging is what makes adb listen on the network, so it must be on
 to connect that way. Android turns it off when the Wi-Fi connection changes,
@@ -101,9 +118,10 @@ The device list labels entries as *Wi-Fi* or *Tailscale* with their IP.
 The steadiest setup is the fixed adb port, because it doesn't need Wireless
 debugging and works on mobile data too:
 
-1. Plug in USB once, then *Wi-Fi → Switch selected USB device to Wi-Fi*
+1. Plug in USB once, then click **Wi-Fi** on the phone's USB card
    (`adb tcpip 5555`).
-2. *Wi-Fi → Connect* to `<phone's Tailscale IP>:5555`, then unplug.
+2. *Add a device by address → Connect* to `<phone's Tailscale IP>:5555`, then
+   unplug.
 3. Repeat after each phone reboot, which closes port 5555.
 
 Port 5555 is then open on every network the phone joins, not only Tailscale.
@@ -127,7 +145,7 @@ lag. Over Wi-Fi the encoder runs in constant-bitrate mode
 otherwise makes VBR overshoot, and a slow link turns that into seconds of
 backlog.
 
-The status bar shows `fps · size · +delay`. The delay is transit time above
+The mirror view's top bar shows `fps · +delay`. The delay is transit time above
 the fastest frame so far, and it turns red above 300 ms. Each second the app
 also prints a `[stats]` line to its terminal: arrival and decode counts,
 transit, decode time, decoder queue, and the largest packet gap both at the

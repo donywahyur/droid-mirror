@@ -9,76 +9,104 @@
   </head>
 
   <body>
-    <header class="toolbar">
-      <select id="device" title="Device"></select>
-      <button id="refresh" class="icon" title="Refresh devices">↻</button>
-      <select id="quality" title="Video quality (Auto: High over USB, Low over Wi-Fi)">
-        <option value="auto" selected>Auto</option>
-        <option value="minimal">Minimal · 800p 1 Mbps</option>
-        <option value="low">Low · 1024p 2 Mbps</option>
-        <option value="medium">Medium · 1280p 4 Mbps</option>
-        <option value="high">High · 1920p 8 Mbps</option>
-        <option value="max">Max · native 16 Mbps</option>
-      </select>
-      <button id="mirror" class="primary">Mirror</button>
-      <button id="wifi-toggle" class="icon" title="Wi-Fi connection" aria-expanded="false">Wi-Fi</button>
-    </header>
+    <!-- ===== Connect view: pick a device ===== -->
+    <section id="connect-view" class="view">
+      <header class="titlebar" data-tauri-drag-region>
+        <h1 data-tauri-drag-region>Droid Mirror</h1>
+        <button id="refresh" class="icon-btn" title="Refresh devices" aria-label="Refresh devices">↻</button>
+      </header>
 
-    <section id="wifi-panel" class="panel" hidden>
-      <div class="row">
-        <button id="wifi-enable" title="Runs adb tcpip 5555 on the selected USB device, then connects to it over Wi-Fi">
-          Switch selected USB device to Wi-Fi
-        </button>
-        <button id="wifi-disconnect" title="adb disconnect the selected wireless device">Disconnect wireless</button>
+      <div class="content">
+        <ul id="device-list" class="device-list" aria-label="Devices"></ul>
+        <p id="empty" class="empty" hidden>
+          No devices yet. Plug in a phone with USB debugging on, turn on Wireless debugging on the same
+          network, or add one below.
+        </p>
+
+        <details id="add-device" class="card">
+          <summary>Add a device by address</summary>
+          <form id="connect-form" class="row">
+            <input
+              id="connect-addr"
+              placeholder="ip:port · e.g. 100.87.116.58:5555"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Device address"
+            />
+            <button type="submit">Connect</button>
+          </form>
+          <form id="pair-form" class="row">
+            <input id="pair-addr" placeholder="Pairing ip:port" autocomplete="off" spellcheck="false" aria-label="Pairing address" />
+            <input id="pair-code" class="short" placeholder="Code" inputmode="numeric" autocomplete="off" aria-label="Pairing code" />
+            <button type="submit">Pair</button>
+          </form>
+          <p class="hint">
+            Wi-Fi or Tailscale address of the phone. Android 11+: pair once with the code from Developer options →
+            Wireless debugging, then connect to the port shown there. For a fixed port, plug in USB and press
+            <b>Wi-Fi</b> on the USB device.
+          </p>
+        </details>
+
+        <div class="card settings">
+          <label class="setting">
+            <span>Quality</span>
+            <select id="quality" aria-label="Video quality">
+              <option value="auto" selected>Auto</option>
+              <option value="minimal">Minimal · 800p 1 Mbps</option>
+              <option value="low">Low · 1024p 2 Mbps</option>
+              <option value="medium">Medium · 1280p 4 Mbps</option>
+              <option value="high">High · 1920p 8 Mbps</option>
+              <option value="max">Max · native 16 Mbps</option>
+            </select>
+          </label>
+          <label class="setting">
+            <span>
+              Turn phone screen off
+              <small>Dark while mirroring, locks when you stop</small>
+            </span>
+            <input type="checkbox" id="screen-off-pref" class="switch" />
+          </label>
+        </div>
       </div>
-      <form id="connect-form" class="row">
-        <input id="connect-addr" placeholder="192.168.1.20:5555" autocomplete="off" spellcheck="false" />
-        <button type="submit">Connect</button>
-      </form>
-      <form id="pair-form" class="row">
-        <input id="pair-addr" placeholder="Pairing ip:port" autocomplete="off" spellcheck="false" />
-        <input id="pair-code" placeholder="Code" inputmode="numeric" autocomplete="off" class="short" />
-        <button type="submit">Pair</button>
-      </form>
-      <p class="hint">
-        Android 11+: Developer options → Wireless debugging → “Pair device with pairing code”, pair here, then
-        Connect to the ip:port shown on the Wireless debugging screen.
-      </p>
+
+      <footer class="statusbar"><span id="status">Looking for devices…</span></footer>
     </section>
 
-    <main id="stage">
-      <canvas id="screen" tabindex="0" hidden></canvas>
-      <div id="stage-hint" role="status" hidden></div>
-      <div id="placeholder">
-        <p>Connect an Android device with USB debugging enabled, then press <b>Mirror</b>.</p>
+    <!-- ===== Mirror view: phone + always-visible controls beside it ===== -->
+    <section id="mirror-view" class="view" hidden>
+      <header class="mirror-bar" data-tauri-drag-region>
+        <span id="mirror-title" data-tauri-drag-region></span>
+        <span id="fps" data-tauri-drag-region></span>
+      </header>
+
+      <div class="mirror-body">
+        <div id="stage">
+          <canvas id="screen" tabindex="0"></canvas>
+          <div id="stage-hint" role="status" hidden></div>
+          <div id="toast" role="status" hidden></div>
+        </div>
+
+        <nav id="controls" class="sidebar" aria-label="Phone controls">
+          <button data-key="4" title="Back (right click)" aria-label="Back">◁</button>
+          <button data-key="3" title="Home (middle click)" aria-label="Home">○</button>
+          <button data-key="187" title="Recent apps" aria-label="Recent apps">▢</button>
+          <span class="sep"></span>
+          <button data-key="24" title="Volume up" aria-label="Volume up">🔊</button>
+          <button data-key="25" title="Volume down" aria-label="Volume down">🔉</button>
+          <button data-key="26" title="Power" aria-label="Power">⏻</button>
+          <span class="sep"></span>
+          <button data-action="rotate" title="Rotate" aria-label="Rotate">⟳</button>
+          <button data-action="notifications" title="Notifications" aria-label="Notifications">☰</button>
+          <span class="spacer"></span>
+          <button id="screen-off" class="toggle" aria-pressed="false" title="Phone screen off" aria-label="Phone screen off">
+            📴
+          </button>
+          <button id="pin" class="toggle" aria-pressed="false" title="Keep window on top" aria-label="Keep window on top">
+            📌
+          </button>
+          <button id="stop" class="danger" title="Stop mirroring" aria-label="Stop mirroring">■</button>
+        </nav>
       </div>
-    </main>
-
-    <nav class="navbar">
-      <button data-key="4" title="Back (right click)">◁</button>
-      <button data-key="3" title="Home (middle click)">○</button>
-      <button data-key="187" title="Recent apps">▢</button>
-      <span class="sep"></span>
-      <button data-key="25" title="Volume down">🔉</button>
-      <button data-key="24" title="Volume up">🔊</button>
-      <button data-key="26" title="Power">⏻</button>
-      <span class="sep"></span>
-      <button data-action="rotate" title="Rotate">⟳</button>
-      <button data-action="notifications" title="Notifications">☰</button>
-      <span class="sep"></span>
-      <button
-        id="screen-off"
-        class="toggle"
-        aria-pressed="false"
-        title="Keep the phone's screen off while mirroring, and lock the phone when mirroring stops"
-      >
-        📴
-      </button>
-    </nav>
-
-    <footer class="statusbar">
-      <span id="status">Idle</span>
-      <span id="fps"></span>
-    </footer>
+    </section>
   </body>
 </html>
