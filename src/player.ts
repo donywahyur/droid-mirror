@@ -80,7 +80,7 @@ export class Player {
   /** min(arrival time - device pts): the fastest observed transit, used as zero. */
   private baselineSkew = Infinity;
   /** Per-interval timing stats, read and reset by takeStats(). */
-  private stats = { arrived: 0, decoded: 0, decodeSum: 0, decodeMax: 0, queueMax: 0, gapMax: 0, transitMax: 0 };
+  private stats = { arrived: 0, bytes: 0, decoded: 0, decodeSum: 0, decodeMax: 0, queueMax: 0, gapMax: 0, transitMax: 0 };
   private lastArrival = 0;
   private decodeStart = new Map<number, number>();
   private decoder: VideoDecoder | null = null;
@@ -125,6 +125,7 @@ export class Player {
 
     const pts = Number(view.getBigUint64(0) & PTS_MASK);
     this.trackDelay(pts);
+    this.stats.bytes += buf.byteLength;
 
     const decoder = this.decoder;
     if (!decoder || decoder.state !== "configured") return;
@@ -177,10 +178,10 @@ export class Player {
     const s = this.stats;
     const avg = s.decoded ? s.decodeSum / s.decoded : 0;
     const line =
-      `arrived=${s.arrived} decoded=${s.decoded} transit(now/max)=${this.delayMs.toFixed(0)}/${s.transitMax.toFixed(0)}ms ` +
+      `arrived=${s.arrived} rate=${((s.bytes * 8) / 1e6).toFixed(2)}Mbps decoded=${s.decoded} transit(now/max)=${this.delayMs.toFixed(0)}/${s.transitMax.toFixed(0)}ms ` +
       `decode(avg/max)=${avg.toFixed(0)}/${s.decodeMax.toFixed(0)}ms queueMax=${s.queueMax} ` +
       `arrivalGapMax=${s.gapMax.toFixed(0)}ms pending=${this.decodeStart.size}`;
-    this.stats = { arrived: 0, decoded: 0, decodeSum: 0, decodeMax: 0, queueMax: 0, gapMax: 0, transitMax: 0 };
+    this.stats = { arrived: 0, bytes: 0, decoded: 0, decodeSum: 0, decodeMax: 0, queueMax: 0, gapMax: 0, transitMax: 0 };
     return line;
   }
 

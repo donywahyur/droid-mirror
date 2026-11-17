@@ -19,6 +19,7 @@ interface VideoOptions {
   maxSize: number;
   bitRate: number;
   maxFps: number;
+  codecOptions?: string;
 }
 
 const QUALITY: Record<string, VideoOptions> = {
@@ -33,7 +34,11 @@ const QUALITY: Record<string, VideoOptions> = {
  * the link's throughput queues up in network buffers as ever-growing lag. */
 function videoOptions(dev: Device): VideoOptions {
   const choice = qualitySelect.value;
-  return QUALITY[choice] ?? (dev.wireless ? QUALITY.low : QUALITY.high);
+  const base = QUALITY[choice] ?? (dev.wireless ? QUALITY.low : QUALITY.high);
+  // Over Wi-Fi, constant bitrate (MediaCodec BITRATE_MODE_CBR = 2) avoids the
+  // spikes VBR produces on full-screen motion (camera, video), which a slow
+  // link turns into seconds of backlog. USB has headroom, so keep VBR quality.
+  return dev.wireless ? { ...base, codecOptions: "bitrate-mode=2" } : base;
 }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;

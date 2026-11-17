@@ -79,13 +79,16 @@ impl Session {
 }
 
 /// Encoder settings passed to scrcpy-server. 0 means "server default / no limit".
-#[derive(Deserialize, Clone, Copy, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoOptions {
     pub max_size: u32,
     /// bits per second
     pub bit_rate: u32,
     pub max_fps: u32,
+    /// MediaCodec options, e.g. "bitrate-mode=2" (CBR). Empty = encoder defaults.
+    #[serde(default)]
+    pub codec_options: String,
 }
 
 #[derive(Serialize)]
@@ -259,6 +262,10 @@ fn launch(
     }
     if video.max_fps > 0 {
         cmd.arg(format!("max_fps={}", video.max_fps));
+    }
+    let codec_options = video.codec_options.trim();
+    if !codec_options.is_empty() {
+        cmd.arg(format!("video_codec_options={codec_options}"));
     }
     let mut child = cmd
         .args([

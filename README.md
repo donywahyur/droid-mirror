@@ -72,7 +72,10 @@ pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
 The quality menu sets the size, bitrate and frame-rate cap. *Auto* uses High
 (1920p, 8 Mbps, 60 fps) over USB and Low (1024p, 2 Mbps, 30 fps) over Wi-Fi.
 A stream above the link's throughput queues up in network buffers as growing
-lag.
+lag. Over Wi-Fi the encoder runs in constant-bitrate mode
+(`video_codec_options=bitrate-mode=2`): full-screen motion such as the camera
+otherwise makes VBR overshoot, and a slow link turns that into seconds of
+backlog.
 
 The status bar shows `fps · size · +delay`. The delay is transit time above
 the fastest frame so far, and it turns red above 300 ms. Each second the app
