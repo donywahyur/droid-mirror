@@ -71,7 +71,13 @@ pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
 | Enter, Backspace, arrows, Tab, Esc… | Android keys |
 | Ctrl+letter | Android Ctrl shortcuts |
 | Cmd+V | Paste the Mac clipboard on the device |
-| Cmd+C | Copy on the device into the Mac clipboard |
+| Cmd+C | Copy the selection on the device into the Mac clipboard |
+
+**Clipboard:** while mirroring, anything copied on the phone goes to the Mac
+clipboard automatically (`clipboard_autosync`), including passwords copied from
+a password manager. Mac → phone is Cmd+V: the text is put on the phone's
+clipboard and pasted into the focused field. The server doesn't echo Mac
+pastes back. Text only, up to about 256 KB.
 
 ## Phone screen off
 

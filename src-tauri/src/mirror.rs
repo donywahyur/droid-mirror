@@ -391,7 +391,10 @@ fn launch(
             "audio=false",
             "control=true",
             "cleanup=true",
-            "clipboard_autosync=false",
+            // Phone -> Mac: the server sends the phone's clipboard whenever it
+            // changes (not changes made by our own Cmd+V), and the control
+            // reader writes it to the Mac clipboard. Mac -> phone stays Cmd+V.
+            "clipboard_autosync=true",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
