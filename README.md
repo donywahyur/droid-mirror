@@ -55,8 +55,8 @@ pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
 - **Mirror view:** the phone fills the window, with nothing on top of it. A
   thin top bar holds the window buttons, the device name (drag it to move the
   window), and fps and delay. A column on the right is always visible: Back,
-  Home, Recents, volume, power, rotate, notifications, phone screen off,
-  📌 keep on top, and ■ stop.
+  Home, Recents, volume, power, rotate, notifications, 📷 copy screen,
+  🖼️ copy newest image, phone screen off, 📌 keep on top, and ■ stop.
 - **Window:** when mirroring starts, the window resizes to the phone's shape
   (plus the bar and column). It resizes again on rotation, and goes back to
   its previous size when you stop.
@@ -70,14 +70,28 @@ pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
 | Typing | Text input |
 | Enter, Backspace, arrows, Tab, Esc… | Android keys |
 | Ctrl+letter | Android Ctrl shortcuts |
-| Cmd+V | Paste the Mac clipboard on the device |
+| Cmd+V | Paste Mac text on the phone; an image (no text) is saved to the phone's gallery |
+| Cmd+Shift+V | Save the Mac clipboard image to the phone's gallery, even if there is text too |
 | Cmd+C | Copy the selection on the device into the Mac clipboard |
 
 **Clipboard:** while mirroring, anything copied on the phone goes to the Mac
 clipboard automatically (`clipboard_autosync`), including passwords copied from
 a password manager. Mac → phone is Cmd+V: the text is put on the phone's
 clipboard and pasted into the focused field. The server doesn't echo Mac
-pastes back. Text only, up to about 256 KB.
+pastes back. Text up to about 256 KB.
+
+**Images:** scrcpy-server's clipboard is text only, so images use workarounds:
+
+- **📷 copy screen:** a full-resolution `screencap` of the phone goes onto the
+  Mac clipboard as PNG. If that fails, the mirrored frame is copied instead.
+- **🖼️ copy newest image:** the most recently added image in the phone's media
+  library (camera, screenshots, downloads, chats; MediaStore `date_added`) goes
+  onto the Mac clipboard. JPEG and PNG stay as they are; HEIC and WebP become
+  JPEG (`sips`). Over Wi-Fi this takes a few seconds for a camera photo.
+- **Mac image → phone:** Cmd+V (or Cmd+Shift+V) saves it as
+  `Pictures/DroidMirror/paste-<time>.png` and has the media scanner index it,
+  so it shows up in the gallery to attach from any app. It isn't pasted
+  straight into a field.
 
 ## Phone screen off
 

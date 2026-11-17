@@ -100,6 +100,10 @@ impl Session {
         }
     }
 
+    pub fn serial(&self) -> &str {
+        &self.serial
+    }
+
     /// Whether a physical touch/key now means "someone is using the phone".
     /// Not while it is locked or asleep (waking it, fingerprint, PIN all
     /// happen there), nor just after it was unlocked by hand.
@@ -656,6 +660,106 @@ fn spawn_device_reader(mut stream: TcpStream) {
     });
 }
 
+/// Put a PNG image on the Mac clipboard.
+pub fn set_mac_clipboard_png(png: &[u8]) -> Result<(), String> {
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("not a PNG image".into());
+    }
+    set_mac_clipboard_image(png, "png", "«class PNGf»")
+}
+
+/// Put a JPEG or PNG image on the Mac clipboard as-is (photos stay JPEG: as
+/// PNG they'd be ~5x larger). Other formats (HEIC, WebP...) become JPEG.
+pub fn set_mac_clipboard_photo(bytes: &[u8], ext: &str) -> Result<(), String> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        set_mac_clipboard_image(bytes, "png", "«class PNGf»")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        set_mac_clipboard_image(bytes, "jpg", "JPEG picture")
+    } else {
+        let jpeg = convert_image(bytes, ext, "jpeg", "jpg")?;
+        set_mac_clipboard_image(&jpeg, "jpg", "JPEG picture")
+    }
+}
+
+/// Write `bytes` to a temp file and set the clipboard from it with AppleScript
+/// (`read ... as <class>`), which pasteboard-aware apps read as an image.
+fn set_mac_clipboard_image(bytes: &[u8], ext: &str, class: &str) -> Result<(), String> {
+    let path = std::env::temp_dir().join(format!("droid-mirror-clipboard.{ext}"));
+    std::fs::write(&path, bytes).map_err(|e| format!("writing temp image: {e}"))?;
+    let script = format!(
+        "set the clipboard to (read (POSIX file \"{}\") as {class})",
+        path.display()
+    );
+    let out = Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| format!("osascript: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "setting the clipboard failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Convert an image macOS can read (HEIC, WebP...) with `sips`.
+fn convert_image(bytes: &[u8], ext: &str, format: &str, out_ext: &str) -> Result<Vec<u8>, String> {
+    let dir = std::env::temp_dir();
+    let src = dir.join(format!("droid-mirror-image.{}", ext.to_ascii_lowercase()));
+    let dst = dir.join(format!("droid-mirror-image-converted.{out_ext}"));
+    std::fs::write(&src, bytes).map_err(|e| format!("writing temp image: {e}"))?;
+    let out = Command::new("/usr/bin/sips")
+        .args(["-s", "format", format])
+        .arg(&src)
+        .arg("--out")
+        .arg(&dst)
+        .output()
+        .map_err(|e| format!("sips: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("couldn't convert the image: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    std::fs::read(&dst).map_err(|e| format!("reading converted image: {e}"))
+}
+
+/// PNG of the image on the Mac clipboard, if there is one. AppleScript turns
+/// TIFF (what many apps copy) into PNG on the way.
+pub fn get_mac_clipboard_png() -> Result<Option<Vec<u8>>, String> {
+    let info = Command::new("/usr/bin/osascript")
+        .args(["-e", "clipboard info"])
+        .output()
+        .map_err(|e| format!("osascript: {e}"))?;
+    let info = String::from_utf8_lossy(&info.stdout);
+    if !(info.contains("PNGf") || info.contains("TIFF")) {
+        return Ok(None);
+    }
+    let path = std::env::temp_dir().join("droid-mirror-paste.png");
+    let p = path.display().to_string().replace('"', "\\\"");
+    let out = Command::new("/usr/bin/osascript")
+        .args([
+            "-e", &format!("set f to open for access (POSIX file \"{p}\") with write permission"),
+            "-e", "set eof f to 0",
+            "-e", "write (the clipboard as «class PNGf») to f",
+            "-e", "close access f",
+        ])
+        .output()
+        .map_err(|e| format!("osascript: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("reading the clipboard image failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    std::fs::read(&path).map(Some).map_err(|e| e.to_string())
+}
+
+/// Width and height from a PNG's IHDR chunk.
+pub fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    if png.len() < 24 || &png[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes(png[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(png[20..24].try_into().ok()?);
+    Some((w, h))
+}
+
 pub fn get_mac_clipboard() -> Result<String, String> {
     let out = Command::new("/usr/bin/pbpaste")
         .output()
@@ -694,6 +798,15 @@ mod tests {
     use super::*;
 
     const S: fn(u64) -> Duration = Duration::from_secs;
+
+    #[test]
+    fn reads_png_size() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend_from_slice(&1080u32.to_be_bytes());
+        png.extend_from_slice(&2340u32.to_be_bytes());
+        assert_eq!(png_size(&png), Some((1080, 2340)));
+        assert_eq!(png_size(b"nope"), None);
+    }
 
     #[test]
     fn physical_input_rules() {

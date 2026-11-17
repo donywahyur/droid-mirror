@@ -11,6 +11,7 @@ pub const TYPE_SET_CLIPBOARD: u8 = 9;
 pub const TYPE_SET_DISPLAY_POWER: u8 = 10;
 pub const TYPE_ROTATE_DEVICE: u8 = 11;
 pub const TYPE_RESET_VIDEO: u8 = 17;
+pub const TYPE_SCAN_FILE: u8 = 22;
 
 /// Touch events with this pointer id are injected as a finger (not a mouse).
 pub const POINTER_ID_GENERIC_FINGER: u64 = -2i64 as u64;
@@ -115,6 +116,16 @@ pub fn display_power(on: bool) -> Vec<u8> {
     vec![TYPE_SET_DISPLAY_POWER, on as u8]
 }
 
+/// Ask Android's media scanner to index a file, so it shows up in the gallery.
+pub fn scan_file(path: &str) -> Vec<u8> {
+    let bytes = path.as_bytes();
+    let mut m = Vec::with_capacity(5 + bytes.len());
+    m.push(TYPE_SCAN_FILE);
+    m.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    m.extend_from_slice(bytes);
+    m
+}
+
 pub fn empty(kind: u8) -> Vec<u8> {
     vec![kind]
 }
@@ -137,6 +148,11 @@ mod tests {
     #[test]
     fn keycode_layout() {
         assert_eq!(keycode(1, 4, 0, 0), vec![0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn scan_file_layout() {
+        assert_eq!(scan_file("/a"), vec![22, 0, 0, 0, 2, b'/', b'a']);
     }
 
     #[test]

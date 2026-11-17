@@ -485,6 +485,47 @@ pinBtn.addEventListener("click", () => {
 });
 $("stop").addEventListener("click", () => stopMirror());
 
+/** Phone screen -> Mac clipboard: a full-resolution screenshot from the phone,
+ * or, if that fails, the frame being shown here (mirror resolution). */
+async function copyScreen() {
+  const btn = $<HTMLButtonElement>("copy-screen");
+  btn.disabled = true;
+  try {
+    const size = await invoke<string>("copy_screen");
+    setStatus(`Screen copied${size ? ` (${size})` : ""}`);
+  } catch (e) {
+    console.warn("screencap failed, using the mirrored frame", e);
+    try {
+      await invoke("copy_png_to_mac", { dataUrl: canvas.toDataURL("image/png") });
+      setStatus(`Screen copied at mirror resolution (${canvas.width}×${canvas.height})`);
+    } catch (e2) {
+      setStatus(`Couldn't copy the screen: ${errorText(e2)}`, true);
+    }
+  } finally {
+    btn.disabled = false;
+    canvas.focus();
+  }
+}
+$("copy-screen").addEventListener("click", () => copyScreen());
+
+/** Phone -> Mac: newest image on the phone to the Mac clipboard. */
+$("copy-latest").addEventListener("click", async () => {
+  const btn = $<HTMLButtonElement>("copy-latest");
+  btn.disabled = true;
+  setStatus("Copying the phone's newest image…");
+  try {
+    const name = await invoke<string>("copy_latest_image");
+    setStatus(`Copied ${name} to the Mac clipboard`);
+  } catch (e) {
+    setStatus(`Couldn't copy the image: ${errorText(e)}`, true);
+  } finally {
+    btn.disabled = false;
+    canvas.focus();
+  }
+});
+
+input.onNotice = (text, error = false) => setStatus(text, error);
+
 $("connect-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const addr = $<HTMLInputElement>("connect-addr").value.trim();

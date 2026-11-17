@@ -136,18 +136,110 @@ fn device_action(app: AppHandle, name: String) -> Res<()> {
     mirror::current(&app)?.send(&control::empty(kind))
 }
 
-/// Cmd+V: put the Mac clipboard on the device clipboard and paste it.
+/// Cmd+V: text on the Mac clipboard is pasted on the phone. With only an
+/// image there (or with `image_only`, Cmd+Shift+V), the image is saved into
+/// the phone's gallery instead: the phone's clipboard can't hold images
+/// through scrcpy-server. Returns a message for the UI, if any.
 #[tauri::command]
-async fn paste_from_mac(app: AppHandle) -> Res<()> {
+async fn paste_from_mac(app: AppHandle, image_only: Option<bool>) -> Res<Option<String>> {
     blocking(move || {
         let session = mirror::current(&app)?;
-        let text = mirror::get_mac_clipboard()?;
-        if text.is_empty() {
-            return Ok(());
+        if !image_only.unwrap_or(false) {
+            let text = mirror::get_mac_clipboard()?;
+            if !text.is_empty() {
+                session.send(&control::set_clipboard(session.next_clipboard_seq(), &text, true))?;
+                return Ok(None);
+            }
         }
-        session.send(&control::set_clipboard(session.next_clipboard_seq(), &text, true))
+        let Some(png) = mirror::get_mac_clipboard_png()? else {
+            return Ok(Some("The Mac clipboard has no text or image".into()));
+        };
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let dir = "/sdcard/Pictures/DroidMirror";
+        let remote = format!("{dir}/paste-{stamp}.png");
+        let local = std::env::temp_dir().join("droid-mirror-paste.png");
+        std::fs::write(&local, &png).map_err(|e| e.to_string())?;
+        adb::run(Some(session.serial()), &["shell", "mkdir", "-p", dir])?;
+        adb::run(Some(session.serial()), &["push", &local.to_string_lossy(), &remote])?;
+        session.send(&control::scan_file(&remote))?;
+        Ok(Some("Image saved to the phone's gallery (Pictures/DroidMirror)".into()))
     })
     .await
+}
+
+/// Phone -> Mac: copy the newest image on the phone (camera, screenshot,
+/// download, chat...) to the Mac clipboard. Returns its file name.
+#[tauri::command]
+async fn copy_latest_image(app: AppHandle) -> Res<String> {
+    blocking(move || {
+        let serial = mirror::current(&app)?.serial().to_string();
+        let path = adb::latest_image_path(&serial)?;
+        let bytes = adb::pull_bytes(&serial, &path)?;
+        let ext = path.rsplit_once('.').map(|(_, e)| e).unwrap_or("jpg");
+        mirror::set_mac_clipboard_photo(&bytes, ext)?;
+        Ok(path.rsplit('/').next().unwrap_or(&path).to_string())
+    })
+    .await
+}
+
+/// Copy the phone's screen (full-resolution screenshot) to the Mac clipboard.
+/// Returns the image size, e.g. "1080×2340".
+#[tauri::command]
+async fn copy_screen(app: AppHandle) -> Res<String> {
+    blocking(move || {
+        let serial = mirror::current(&app)?.serial().to_string();
+        let png = adb::screencap_png(&serial)?;
+        mirror::set_mac_clipboard_png(&png)?;
+        Ok(mirror::png_size(&png)
+            .map(|(w, h)| format!("{w}×{h}"))
+            .unwrap_or_default())
+    })
+    .await
+}
+
+/// Fallback for `copy_screen`: a PNG made in the webview from the mirrored
+/// frame, as a `data:image/png;base64,...` URL.
+#[tauri::command]
+async fn copy_png_to_mac(data_url: String) -> Res<()> {
+    blocking(move || {
+        let b64 = data_url
+            .strip_prefix("data:image/png;base64,")
+            .ok_or("expected a PNG data URL")?;
+        let png = base64_decode(b64)?;
+        mirror::set_mac_clipboard_png(&png)
+    })
+    .await
+}
+
+fn base64_decode(input: &str) -> Res<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for &c in input.as_bytes() {
+        if c == b'=' || c.is_ascii_whitespace() {
+            continue;
+        }
+        acc = (acc << 6) | val(c).ok_or("invalid base64")?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Ok(out)
 }
 
 /// Cmd+C: press "copy" on the device; the device sends its clipboard back and
@@ -184,6 +276,9 @@ pub fn run() {
             set_display_power,
             paste_from_mac,
             copy_to_mac,
+            copy_screen,
+            copy_latest_image,
+            copy_png_to_mac,
             log_stats,
         ])
         .build(tauri::generate_context!())
@@ -193,4 +288,14 @@ pub fn run() {
                 mirror::stop(&app.state::<MirrorState>(), None, StopKind::User);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn decodes_base64() {
+        assert_eq!(super::base64_decode("aGVsbG8gd29ybGQ=").unwrap(), b"hello world");
+        assert_eq!(super::base64_decode("iVBORw0KGgo=").unwrap(), b"\x89PNG\r\n\x1a\n");
+        assert!(super::base64_decode("**").is_err());
+    }
 }

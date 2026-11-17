@@ -57,6 +57,8 @@ function report(promise: Promise<unknown>) {
 
 export class InputHandler {
   enabled = false;
+  /** Messages for the user (e.g. "Image saved to the phone's gallery"). */
+  onNotice?: (text: string, error?: boolean) => void;
   private pointerDown = false;
   /** Keycodes sent as "down" that still need an "up". */
   private heldKeys = new Map<string, number>();
@@ -157,7 +159,10 @@ export class InputHandler {
       // Cmd shortcuts: clipboard bridging; leave the rest to macOS (Cmd+Q, Cmd+W...).
       if (e.code === "KeyV") {
         e.preventDefault();
-        report(invoke("paste_from_mac"));
+        // Cmd+Shift+V: paste the image even if the clipboard also has text.
+        invoke<string | null>("paste_from_mac", { imageOnly: e.shiftKey })
+          .then((msg) => msg && this.onNotice?.(msg))
+          .catch((err) => this.onNotice?.(String(err), true));
       } else if (e.code === "KeyC") {
         e.preventDefault();
         report(invoke("copy_to_mac"));

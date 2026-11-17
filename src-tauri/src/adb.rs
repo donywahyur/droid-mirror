@@ -201,6 +201,57 @@ fn parse_physical_input_devices(getevent_il: &str) -> Vec<String> {
     result
 }
 
+/// Quote a path for the phone's shell.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Path of the newest image in the phone's media library (camera, screenshots,
+/// downloads, chat apps...), by when it was added.
+pub fn latest_image_path(serial: &str) -> Result<String, String> {
+    let out = run(
+        Some(serial),
+        &[
+            "shell",
+            "content query --uri content://media/external/images/media \
+             --projection _data --sort 'date_added DESC' | head -1",
+        ],
+    )?;
+    parse_media_path(&out).ok_or_else(|| "no images found on the phone".to_string())
+}
+
+fn parse_media_path(row: &str) -> Option<String> {
+    let path = row.lines().next()?.split_once("_data=")?.1.trim();
+    (!path.is_empty() && path != "NULL").then(|| path.to_string())
+}
+
+/// Read a whole file from the phone.
+pub fn pull_bytes(serial: &str, path: &str) -> Result<Vec<u8>, String> {
+    let out = command(Some(serial))?
+        .args(["exec-out", &format!("cat {}", sh_quote(path))])
+        .output()
+        .map_err(|e| format!("reading {path}: {e}"))?;
+    if !out.status.success() || out.stdout.is_empty() {
+        return Err(format!("couldn't read {path} from the phone"));
+    }
+    Ok(out.stdout)
+}
+
+/// Full-resolution PNG screenshot of the phone's screen.
+pub fn screencap_png(serial: &str) -> Result<Vec<u8>, String> {
+    let out = command(Some(serial))?
+        .args(["exec-out", "screencap", "-p"])
+        .output()
+        .map_err(|e| format!("screencap: {e}"))?;
+    if !out.status.success() || !out.stdout.starts_with(b"\x89PNG") {
+        return Err(format!(
+            "screencap failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(out.stdout)
+}
+
 /// IPv4 address of the device's Wi-Fi interface.
 pub fn wifi_ip(serial: &str) -> Result<String, String> {
     let routes = run(Some(serial), &["shell", "ip", "route"])?;
@@ -329,6 +380,16 @@ add device 10: /dev/input/event4
             parse_physical_input_devices(GETEVENT_IL),
             vec!["/dev/input/event7", "/dev/input/event1", "/dev/input/event0", "/dev/input/event6"]
         );
+    }
+
+    #[test]
+    fn parses_media_query_row() {
+        assert_eq!(
+            parse_media_path("Row: 0 _data=/storage/emulated/0/DCIM/Camera/my photo.jpg\n").as_deref(),
+            Some("/storage/emulated/0/DCIM/Camera/my photo.jpg")
+        );
+        assert_eq!(parse_media_path("No result found.\n"), None);
+        assert_eq!(sh_quote("it's.jpg"), "'it'\\''s.jpg'");
     }
 
     #[test]
