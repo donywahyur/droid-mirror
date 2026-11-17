@@ -57,6 +57,26 @@ pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
 | Cmd+V | Paste the Mac clipboard on the device |
 | Cmd+C | Copy on the device into the Mac clipboard |
 
+## Phone screen off
+
+The 📱/📴 toggle in the bottom bar keeps the phone's own screen dark while you
+use it from the Mac. Turn it on before pressing *Mirror*. The setting is remembered.
+
+- If the phone is locked, its screen stays on until you unlock it (from the
+  Mac or by hand), then turns off. Android puts a locked phone back to sleep
+  after about 10 s, and a sleeping phone mirrors as black.
+- Unlocking turns the screen back on, so it is turned off again after every
+  unlock. Waking the phone with its own power button leaves it on.
+- For the session, the phone's screen timeout is raised to 30 minutes, so
+  the phone doesn't fall asleep while dark. scrcpy-server restores your setting
+  when mirroring stops, and the phone locks (`power_off_on_close`).
+- While mirroring, the app checks once a second whether the phone is locked or
+  asleep (`dumpsys`, filtered on the phone) and says so instead of showing a
+  black picture.
+
+A dark screen is not a lock. Until mirroring stops, anyone holding the phone
+can press its power button and get in unlocked.
+
 ## Wi-Fi
 
 - **Android 11+ wireless debugging:** phones with Wireless debugging on are

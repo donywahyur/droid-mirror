@@ -67,11 +67,12 @@ async fn start_mirror(
     app: AppHandle,
     serial: String,
     video: VideoOptions,
+    screen_off_mode: bool,
     on_packet: Channel<InvokeResponseBody>,
 ) -> Res<StartInfo> {
     blocking(move || {
         mirror::stop(&app.state::<MirrorState>(), None);
-        mirror::start(&app, &serial, video, on_packet)
+        mirror::start(&app, &serial, video, screen_off_mode, on_packet)
     })
     .await
 }
@@ -115,6 +116,12 @@ fn inject_text(app: AppHandle, text: String) -> Res<()> {
         session.send(&control::text(chunk))?;
     }
     Ok(())
+}
+
+/// Turn the phone's own screen on/off; mirroring continues either way.
+#[tauri::command]
+fn set_display_power(app: AppHandle, on: bool) -> Res<()> {
+    mirror::current(&app)?.set_screen_off(!on)
 }
 
 /// One-shot device actions without payload.
@@ -174,6 +181,7 @@ pub fn run() {
             press_key,
             inject_text,
             device_action,
+            set_display_power,
             paste_from_mac,
             copy_to_mac,
             log_stats,

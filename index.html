@@ -48,6 +48,7 @@
 
     <main id="stage">
       <canvas id="screen" tabindex="0" hidden></canvas>
+      <div id="stage-hint" role="status" hidden></div>
       <div id="placeholder">
         <p>Connect an Android device with USB debugging enabled, then press <b>Mirror</b>.</p>
       </div>
@@ -64,6 +65,15 @@
       <span class="sep"></span>
       <button data-action="rotate" title="Rotate">⟳</button>
       <button data-action="notifications" title="Notifications">☰</button>
+      <span class="sep"></span>
+      <button
+        id="screen-off"
+        class="toggle"
+        aria-pressed="false"
+        title="Keep the phone's screen off while mirroring, and lock the phone when mirroring stops"
+      >
+        📴
+      </button>
     </nav>
 
     <footer class="statusbar">

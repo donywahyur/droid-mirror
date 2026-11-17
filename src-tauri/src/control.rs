@@ -8,6 +8,7 @@ pub const TYPE_INJECT_SCROLL_EVENT: u8 = 3;
 pub const TYPE_EXPAND_NOTIFICATION_PANEL: u8 = 5;
 pub const TYPE_GET_CLIPBOARD: u8 = 8;
 pub const TYPE_SET_CLIPBOARD: u8 = 9;
+pub const TYPE_SET_DISPLAY_POWER: u8 = 10;
 pub const TYPE_ROTATE_DEVICE: u8 = 11;
 pub const TYPE_RESET_VIDEO: u8 = 17;
 
@@ -109,6 +110,11 @@ pub fn set_clipboard(sequence: u64, text: &str, paste: bool) -> Vec<u8> {
     m
 }
 
+/// Turn the phone's physical display on/off. Mirroring and input keep working.
+pub fn display_power(on: bool) -> Vec<u8> {
+    vec![TYPE_SET_DISPLAY_POWER, on as u8]
+}
+
 pub fn empty(kind: u8) -> Vec<u8> {
     vec![kind]
 }
@@ -131,6 +137,12 @@ mod tests {
     #[test]
     fn keycode_layout() {
         assert_eq!(keycode(1, 4, 0, 0), vec![0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn display_power_layout() {
+        assert_eq!(display_power(false), vec![10, 0]);
+        assert_eq!(display_power(true), vec![10, 1]);
     }
 
     #[test]

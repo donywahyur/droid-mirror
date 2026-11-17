@@ -182,6 +182,44 @@ pub fn wifi_ip(serial: &str) -> Result<String, String> {
     Err("Could not find the device's Wi-Fi IP address. Is Wi-Fi turned on?".into())
 }
 
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PhoneState {
+    /// Lock screen is showing.
+    pub locked: bool,
+    /// Screen awake (not dozing/asleep). An asleep phone mirrors as black.
+    pub awake: bool,
+}
+
+/// Lock and sleep state in one adb round trip. `grep` runs on the phone so
+/// only two short lines cross the (possibly slow) link.
+pub fn phone_state(serial: &str) -> Result<PhoneState, String> {
+    let out = run(
+        Some(serial),
+        &[
+            "shell",
+            "dumpsys activity activities | grep -m1 -o 'isKeyguardShowing=[a-z]*'; \
+             dumpsys power | grep -m1 -o 'mWakefulness=[A-Za-z]*'",
+        ],
+    )?;
+    parse_phone_state(&out)
+}
+
+fn parse_phone_state(out: &str) -> Result<PhoneState, String> {
+    let mut locked = None;
+    let mut awake = None;
+    for line in out.lines().map(str::trim) {
+        if let Some(v) = line.strip_prefix("isKeyguardShowing=") {
+            locked = Some(v == "true");
+        } else if let Some(v) = line.strip_prefix("mWakefulness=") {
+            awake = Some(v == "Awake");
+        }
+    }
+    match (locked, awake) {
+        (Some(locked), Some(awake)) => Ok(PhoneState { locked, awake }),
+        _ => Err(format!("unexpected phone state output: {out:?}")),
+    }
+}
+
 /// `adb connect host:port`. adb exits 0 even on failure, so check the text.
 pub fn connect(addr: &str) -> Result<String, String> {
     let out = run(None, &["connect", addr])?;
@@ -211,6 +249,19 @@ pub fn disconnect(addr: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_phone_state() {
+        assert_eq!(
+            parse_phone_state("isKeyguardShowing=true\n  mWakefulness=Dozing\n"),
+            Ok(PhoneState { locked: true, awake: false })
+        );
+        assert_eq!(
+            parse_phone_state("isKeyguardShowing=false\nmWakefulness=Awake\n"),
+            Ok(PhoneState { locked: false, awake: true })
+        );
+        assert!(parse_phone_state("isKeyguardShowing=false\n").is_err());
+    }
 
     #[test]
     fn parses_mdns_services() {

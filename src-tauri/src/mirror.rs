@@ -15,7 +15,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -25,6 +25,9 @@ use tauri::{AppHandle, Emitter, Manager};
 const DEVICE_JAR: &str = "/data/local/tmp/droid-mirror-server.jar";
 const CODEC_H264: u32 = 0x6832_3634; // "h264"
 const DEVICE_NAME_LEN: usize = 64;
+/// Phone screen timeout while mirroring in "screen off" mode: 30 minutes of
+/// no input from the Mac still lets the phone sleep and lock.
+const SCREEN_OFF_MODE_TIMEOUT_MS: u32 = 30 * 60 * 1000;
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -50,9 +53,27 @@ pub struct Session {
     video: TcpStream,
     child: Mutex<Child>,
     clipboard_seq: AtomicU64,
+    /// "Phone screen off" mode: keep the physical display off while mirroring.
+    screen_off: AtomicBool,
+    /// Display-off requested but not applied yet: the phone watcher applies it
+    /// once the phone is awake and unlocked.
+    off_pending: AtomicBool,
 }
 
 impl Session {
+    /// Turn screen-off mode on/off. Turning on is deferred to the phone
+    /// watcher: on the lock screen the display must stay on, because Android
+    /// puts a locked phone back to sleep after ~10 s, and asleep mirrors black.
+    pub fn set_screen_off(&self, off: bool) -> Result<(), String> {
+        self.screen_off.store(off, Ordering::Relaxed);
+        self.off_pending.store(off, Ordering::Relaxed);
+        if off {
+            Ok(())
+        } else {
+            self.send(&control::display_power(true))
+        }
+    }
+
     pub fn send(&self, msg: &[u8]) -> Result<(), String> {
         let mut stream = self.control.lock().map_err(|e| e.to_string())?;
         stream.write_all(msg).map_err(|e| format!("control socket: {e}"))
@@ -222,6 +243,7 @@ pub fn start(
     app: &AppHandle,
     serial: &str,
     video: VideoOptions,
+    screen_off_mode: bool,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<StartInfo, String> {
     let (jar, version) = locate_server()?;
@@ -235,7 +257,7 @@ pub fn start(
         &["forward", &local, &format!("localabstract:scrcpy_{scid:08x}")],
     )?;
 
-    let result = launch(app, serial, &version, scid, port, video, channel);
+    let result = launch(app, serial, &version, scid, port, video, screen_off_mode, channel);
     if result.is_err() {
         let _ = adb::run(Some(serial), &["forward", "--remove", &local]);
     }
@@ -249,6 +271,7 @@ fn launch(
     scid: u32,
     port: u16,
     video: VideoOptions,
+    screen_off_mode: bool,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<StartInfo, String> {
     let mut cmd = adb::command(Some(serial))?;
@@ -266,6 +289,15 @@ fn launch(
     let codec_options = video.codec_options.trim();
     if !codec_options.is_empty() {
         cmd.arg(format!("video_codec_options={codec_options}"));
+    }
+    if screen_off_mode {
+        // Lock the phone (screen off) when the server exits.
+        cmd.arg("power_off_on_close=true");
+        // With the display dark nobody touches the phone itself, so its own
+        // screen timeout (often 30 s) would put it to sleep mid-session:
+        // video freezes and the phone locks. The server raises the timeout
+        // for the session and restores the user's setting on exit (cleanup).
+        cmd.arg(format!("screen_off_timeout={SCREEN_OFF_MODE_TIMEOUT_MS}"));
     }
     let mut child = cmd
         .args([
@@ -321,12 +353,15 @@ fn launch(
         video: video.try_clone().map_err(clone_err)?,
         child: Mutex::new(child),
         clipboard_seq: AtomicU64::new(1),
+        screen_off: AtomicBool::new(false),
+        off_pending: AtomicBool::new(false),
     });
 
     *app.state::<MirrorState>().current.lock().unwrap() = Some(session.clone());
 
     spawn_video_reader(app.clone(), session.id, video, channel);
     spawn_device_reader(control);
+    spawn_phone_watcher(app.clone(), session.clone());
 
     Ok(StartInfo {
         device_name,
@@ -348,6 +383,46 @@ fn spawn_video_reader(
         // Stopped by the user? Then the session is already gone and nothing is emitted.
         if stop(&app.state::<MirrorState>(), Some(session_id)) {
             let _ = app.emit("mirror-closed", reason);
+        }
+    });
+}
+
+/// Polls the phone's lock/sleep state once a second for the whole session:
+/// - emits "phone-state" on change, so the UI can say "asleep" / "locked"
+///   instead of showing an unexplained black or frozen picture;
+/// - in screen-off mode, turns the display off once the phone is awake and
+///   unlocked, and again after every unlock (unlocking turns it back on).
+///   Only on those events: a phone woken by hand with its power button stays on.
+fn spawn_phone_watcher(app: AppHandle, session: Arc<Session>) {
+    thread::spawn(move || {
+        let mut last: Option<adb::PhoneState> = None;
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            let still_current = current(&app).map(|s| s.id == session.id).unwrap_or(false);
+            if !still_current {
+                break;
+            }
+            let Ok(state) = adb::phone_state(&session.serial) else {
+                continue;
+            };
+            if last != Some(state) {
+                let _ = app.emit("phone-state", state);
+            }
+            let unlocked_now = last.is_some_and(|l| l.locked) && !state.locked;
+            if unlocked_now && session.screen_off.load(Ordering::Relaxed) {
+                session.off_pending.store(true, Ordering::Relaxed);
+            }
+            if state.awake && !state.locked && session.off_pending.load(Ordering::Relaxed) {
+                if unlocked_now {
+                    // Let the unlock animation finish, or it turns the display on after us.
+                    thread::sleep(Duration::from_millis(500));
+                }
+                if session.send(&control::display_power(false)).is_ok() {
+                    session.off_pending.store(false, Ordering::Relaxed);
+                    let _ = app.emit("screen-off-applied", ());
+                }
+            }
+            last = Some(state);
         }
     });
 }

@@ -89,8 +89,61 @@ function updateUi() {
   placeholder.hidden = mirroring;
   $<HTMLButtonElement>("wifi-enable").disabled = !dev || dev.wireless || dev.state !== "device";
   $<HTMLButtonElement>("wifi-disconnect").disabled = !dev || !dev.wireless;
-  document.querySelectorAll<HTMLButtonElement>(".navbar button").forEach((b) => (b.disabled = !mirroring));
+  document.querySelectorAll<HTMLButtonElement>(NAV_ACTIONS).forEach((b) => (b.disabled = !mirroring));
 }
+
+// ---- phone screen off (persisted preference) ----
+
+const NAV_ACTIONS = ".navbar button[data-key], .navbar button[data-action]";
+const screenOffBtn = $<HTMLButtonElement>("screen-off");
+
+function loadPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function savePref(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* storage unavailable: preference lasts for this run only */
+  }
+}
+
+let screenOff = loadPref("screenOff") === "1";
+/** Whether the running session was started in screen-off mode (server flags
+ * like the extended screen timeout can only be set at start). */
+let sessionScreenOffMode = false;
+
+function renderScreenOff() {
+  screenOffBtn.setAttribute("aria-pressed", String(screenOff));
+  screenOffBtn.textContent = screenOff ? "📴" : "📱";
+}
+
+function applyScreenPower() {
+  invoke("set_display_power", { on: !screenOff }).catch((e) => setStatus(errorText(e), true));
+}
+
+screenOffBtn.addEventListener("click", () => {
+  screenOff = !screenOff;
+  savePref("screenOff", screenOff ? "1" : "0");
+  renderScreenOff();
+  if (mirroring) {
+    applyScreenPower();
+    if (!screenOff) setStatus("Phone screen on");
+    else if (sessionScreenOffMode) setStatus("Phone screen off (it locks when mirroring stops)");
+    else
+      setStatus(
+        "Phone screen off. Its own screen timeout still applies: stop and Mirror again to keep it awake.",
+        true,
+      );
+    canvas.focus();
+  }
+});
+renderScreenOff();
 
 /** Scale the canvas to fit the stage while keeping the device aspect ratio. */
 function fit() {
@@ -163,11 +216,15 @@ async function startMirror() {
     const info = await invoke<StartInfo>("start_mirror", {
       serial: dev.serial,
       video: videoOptions(dev),
+      screenOffMode: screenOff,
       onPacket: channel,
     });
     mirroring = true;
     input.enabled = true;
+    sessionScreenOffMode = screenOff;
+    deviceName = info.deviceName;
     setStatus(`Mirroring ${info.deviceName}`);
+    if (screenOff) applyScreenPower();
     document.title = `Droid Mirror – ${info.deviceName}`;
   } catch (e) {
     setStatus(errorText(e), true);
@@ -182,6 +239,7 @@ async function startMirror() {
 }
 
 async function stopMirror() {
+  showHint(null);
   mirroring = false;
   input.enabled = false;
   updateUi();
@@ -253,7 +311,7 @@ $("pair-form").addEventListener("submit", (e) => {
   if (addr && code) runAdb(`Pairing with ${addr}`, "adb_pair", { addr, code });
 });
 
-document.querySelectorAll<HTMLButtonElement>(".navbar button").forEach((btn) => {
+document.querySelectorAll<HTMLButtonElement>(NAV_ACTIONS).forEach((btn) => {
   btn.addEventListener("click", () => {
     const req = btn.dataset.key
       ? invoke("press_key", { keycode: Number(btn.dataset.key) })
@@ -263,7 +321,43 @@ document.querySelectorAll<HTMLButtonElement>(".navbar button").forEach((btn) => 
   });
 });
 
+// ---- phone lock / sleep state (polled by Rust while mirroring) ----
+
+interface PhoneState {
+  locked: boolean;
+  awake: boolean;
+}
+
+let deviceName = "";
+const stageHint = $<HTMLElement>("stage-hint");
+
+function showHint(text: string | null) {
+  stageHint.hidden = !text;
+  stageHint.textContent = text ?? "";
+}
+
+listen<PhoneState>("phone-state", ({ payload: s }) => {
+  if (!mirroring) return;
+  if (!s.awake) {
+    showHint("Phone is asleep. Press ⏻ below to wake it.");
+    setStatus("Phone is asleep", true);
+  } else if (s.locked) {
+    showHint(null);
+    setStatus(
+      screenOff
+        ? "Phone is locked: unlock it here. Its screen turns off after you unlock."
+        : "Phone is locked: unlock it here",
+    );
+  } else {
+    showHint(null);
+    setStatus(`Mirroring ${deviceName}`);
+  }
+});
+
+listen("screen-off-applied", () => setStatus(`Mirroring ${deviceName} · phone screen off`));
+
 listen<string>("mirror-closed", (e) => {
+  showHint(null);
   mirroring = false;
   input.enabled = false;
   player.reset();
