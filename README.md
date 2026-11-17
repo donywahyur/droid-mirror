@@ -87,6 +87,36 @@ can press its power button and get in unlocked.
   device to Wi-Fi*. This runs `adb tcpip 5555` and then `adb connect <ip>:5555`.
   After that you can unplug the cable.
 
+Wireless debugging is what makes adb listen on the network, so it must be on
+to connect that way. Android turns it off when the Wi-Fi connection changes,
+and it gets a new port each time. "Connection refused" from a phone that is
+otherwise reachable almost always means it is off.
+
+## Tailscale (mirror from anywhere)
+
+With [Tailscale](https://tailscale.com) on both the Mac and the phone, the
+phone has a fixed `100.x.y.z` address the Mac can reach from any network.
+The device list labels entries as *Wi-Fi* or *Tailscale* with their IP.
+
+The steadiest setup is the fixed adb port, because it doesn't need Wireless
+debugging and works on mobile data too:
+
+1. Plug in USB once, then *Wi-Fi → Switch selected USB device to Wi-Fi*
+   (`adb tcpip 5555`).
+2. *Wi-Fi → Connect* to `<phone's Tailscale IP>:5555`, then unplug.
+3. Repeat after each phone reboot, which closes port 5555.
+
+Port 5555 is then open on every network the phone joins, not only Tailscale.
+adb still requires the RSA key you approved, but reboot the phone before using
+public Wi-Fi.
+
+Wireless debugging also works over Tailscale (`<Tailscale IP>:<port shown on
+the phone>`), but the phone must be on some Wi-Fi, the port changes, and mDNS
+discovery only finds phones on the local network.
+
+On the same network, Tailscale takes the direct LAN path, so speed is about
+the same as plain Wi-Fi. Through a relay it is slower: use *Low* or *Minimal*.
+
 ## Quality and lag
 
 The quality menu sets the size, bitrate and frame-rate cap. *Auto* uses High

@@ -70,7 +70,16 @@ function setStatus(text: string, error = false) {
 }
 
 function errorText(e: unknown) {
-  return typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
+  const msg = typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
+  // adb only says "Connection refused"; for a phone that answers on the network
+  // this nearly always means Wireless debugging is off or got a new port.
+  if (/connection refused/i.test(msg) && !/hint:/.test(msg)) {
+    return (
+      `${msg} – hint: Wireless debugging is off on the phone, or its port changed. ` +
+      "Turn it on (Android turns it off when Wi-Fi changes) and use the port shown on its screen."
+    );
+  }
+  return msg;
 }
 
 function selectedDevice(): Device | undefined {
@@ -156,6 +165,16 @@ function fit() {
   canvas.style.height = `${Math.floor(h * scale)}px`;
 }
 
+/** "USB", "Wi-Fi 192.168.1.5" or "Tailscale 100.87.116.58". Tailscale hands out
+ * addresses from 100.64.0.0/10 (CGNAT range), so the IP alone tells them apart. */
+function connectionLabel(d: Device): string {
+  if (!d.wireless) return "USB";
+  const ip = d.serial.split(":")[0];
+  const m = /^100\.(\d+)\./.exec(ip);
+  const tailscale = m !== null && Number(m[1]) >= 64 && Number(m[1]) <= 127;
+  return `${tailscale ? "Tailscale" : "Wi-Fi"} ${/^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : d.serial}`;
+}
+
 async function refreshDevices(prefer?: string) {
   try {
     devices = await invoke<Device[]>("list_devices");
@@ -166,7 +185,7 @@ async function refreshDevices(prefer?: string) {
   const previous = prefer ?? deviceSelect.value;
   deviceSelect.replaceChildren(
     ...devices.map((d) => {
-      const label = `${d.model ?? d.serial}${d.wireless ? " (Wi-Fi)" : " (USB)"}`;
+      const label = `${d.model ?? d.serial} (${connectionLabel(d)})`;
       const suffix =
         d.state === "device"
           ? ""
