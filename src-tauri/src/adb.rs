@@ -162,6 +162,45 @@ fn connected_devices() -> Result<Vec<Device>, String> {
         .collect())
 }
 
+/// Input devices that mean "someone is using the phone itself": its built-in
+/// touchscreen and hardware keys. Events injected from the Mac go through
+/// Android's InputManager and never reach these kernel devices.
+///
+/// Skipped: Bluetooth/USB peripherals (a watch or keyboard, bus 0005/0003) and
+/// sensors (proximity, light, cover) that fire without anyone touching the phone.
+pub fn physical_input_devices(serial: &str) -> Result<Vec<String>, String> {
+    let out = run(Some(serial), &["shell", "getevent -il"])?;
+    Ok(parse_physical_input_devices(&out))
+}
+
+fn parse_physical_input_devices(getevent_il: &str) -> Vec<String> {
+    const WANTED: [&str; 4] = ["ABS_MT_POSITION_X", "KEY_POWER", "KEY_VOLUMEUP", "KEY_VOLUMEDOWN"];
+    let mut result = Vec::new();
+    let mut flush = |path: &Option<String>, bus: &Option<String>, wanted: bool| {
+        if let (Some(path), true) = (path, wanted) {
+            let external = matches!(bus.as_deref(), Some("0003") | Some("0005"));
+            if !external {
+                result.push(path.clone());
+            }
+        }
+    };
+    let (mut path, mut bus, mut wanted) = (None::<String>, None::<String>, false);
+    for line in getevent_il.lines() {
+        if let Some(rest) = line.strip_prefix("add device ") {
+            flush(&path, &bus, wanted);
+            path = rest.split_once(": ").map(|(_, p)| p.trim().to_string());
+            bus = None;
+            wanted = false;
+        } else if let Some(b) = line.trim().strip_prefix("bus:") {
+            bus = Some(b.trim().to_string());
+        } else if WANTED.iter().any(|w| line.contains(w)) {
+            wanted = true;
+        }
+    }
+    flush(&path, &bus, wanted);
+    result
+}
+
 /// IPv4 address of the device's Wi-Fi interface.
 pub fn wifi_ip(serial: &str) -> Result<String, String> {
     let routes = run(Some(serial), &["shell", "ip", "route"])?;
@@ -249,6 +288,48 @@ pub fn disconnect(addr: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Trimmed `getevent -il` from a Galaxy S24 FE with a Bluetooth watch paired.
+    const GETEVENT_IL: &str = "\
+add device 1: /dev/input/event10
+  bus:      0005
+  name:     \"HUAWEI WATCH FIT 5 Pro-28E\"
+                ABS_MT_POSITION_X     : value 0, min 0, max 1079
+add device 2: /dev/input/event9
+  bus:      0005
+  name:     \"HUAWEI WATCH FIT 5 Pro-28E Consumer Control\"
+    KEY (0001): KEY_MUTE              KEY_VOLUMEDOWN        KEY_VOLUMEUP
+add device 3: /dev/input/event8
+  bus:      0018
+  name:     \"sec_touchproximity\"
+add device 4: /dev/input/event7
+  bus:      0018
+  name:     \"sec_touchpad\"
+                ABS_MT_POSITION_X     : value 0, min 0, max 4095
+add device 5: /dev/input/event1
+  bus:      0018
+  name:     \"s2mps27-power-keys\"
+    KEY (0001): KEY_VOLUMEDOWN        KEY_POWER
+add device 6: /dev/input/event0
+  bus:      0019
+  name:     \"gpio_keys\"
+    KEY (0001): KEY_VOLUMEUP
+add device 8: /dev/input/event6
+  bus:      0018
+  name:     \"sec_touchscreen\"
+                ABS_MT_POSITION_X     : value 0, min 0, max 4095
+add device 10: /dev/input/event4
+  bus:      0000
+  name:     \"hall\"
+";
+
+    #[test]
+    fn picks_built_in_touch_and_keys_only() {
+        assert_eq!(
+            parse_physical_input_devices(GETEVENT_IL),
+            vec!["/dev/input/event7", "/dev/input/event1", "/dev/input/event0", "/dev/input/event6"]
+        );
+    }
 
     #[test]
     fn parses_phone_state() {

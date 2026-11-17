@@ -15,7 +15,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -28,6 +28,18 @@ const DEVICE_NAME_LEN: usize = 64;
 /// Phone screen timeout while mirroring in "screen off" mode: 30 minutes of
 /// no input from the Mac still lets the phone sleep and lock.
 const SCREEN_OFF_MODE_TIMEOUT_MS: u32 = 30 * 60 * 1000;
+/// Android KEYCODE_SLEEP: puts the device to sleep (and so locks it).
+const KEYCODE_SLEEP: u32 = 223;
+/// Physical input right after mirroring starts (the hand that just unlocked
+/// the phone or tapped Mirror on it) doesn't count as "using the phone".
+const USE_GRACE: Duration = Duration::from_secs(3);
+/// After the phone is unlocked by hand (fingerprint, PIN), its touches keep
+/// coming for a moment (finger lifting, swipe-up animation): not "use" yet.
+const UNLOCK_GRACE: Duration = Duration::from_secs(2);
+
+const LOCK_UNKNOWN: u8 = 0;
+const LOCK_LOCKED: u8 = 1;
+const LOCK_UNLOCKED: u8 = 2;
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -58,6 +70,20 @@ pub struct Session {
     /// Display-off requested but not applied yet: the phone watcher applies it
     /// once the phone is awake and unlocked.
     off_pending: AtomicBool,
+    started: Instant,
+    /// `adb shell getevent` watching the phone's own touchscreen and buttons.
+    use_watcher: Mutex<Option<Child>>,
+    /// Last polled lock state (LOCK_*): locked means lock screen or asleep.
+    lock_state: AtomicU8,
+    /// When the phone watcher last saw it go from locked to unlocked.
+    unlocked_at: Mutex<Option<Instant>>,
+}
+
+/// See `Session::physical_input_counts`.
+fn input_counts(since_start: Duration, lock_state: u8, since_unlock: Option<Duration>) -> bool {
+    since_start >= USE_GRACE
+        && lock_state == LOCK_UNLOCKED
+        && since_unlock.is_none_or(|d| d >= UNLOCK_GRACE)
 }
 
 impl Session {
@@ -74,6 +100,17 @@ impl Session {
         }
     }
 
+    /// Whether a physical touch/key now means "someone is using the phone".
+    /// Not while it is locked or asleep (waking it, fingerprint, PIN all
+    /// happen there), nor just after it was unlocked by hand.
+    fn physical_input_counts(&self) -> bool {
+        input_counts(
+            self.started.elapsed(),
+            self.lock_state.load(Ordering::Relaxed),
+            self.unlocked_at.lock().unwrap().map(|t| t.elapsed()),
+        )
+    }
+
     pub fn send(&self, msg: &[u8]) -> Result<(), String> {
         let mut stream = self.control.lock().map_err(|e| e.to_string())?;
         stream.write_all(msg).map_err(|e| format!("control socket: {e}"))
@@ -83,7 +120,30 @@ impl Session {
         self.clipboard_seq.fetch_add(1, Ordering::Relaxed)
     }
 
-    fn shutdown(&self) {
+    fn shutdown(&self, kind: StopKind) {
+        match kind {
+            // Stopped from the Mac with the phone dark: lock it rather than
+            // leave an unlocked phone lying around. Turn the display back on
+            // first, so scrcpy's cleanup doesn't light it up again after.
+            StopKind::User if self.screen_off.load(Ordering::Relaxed) => {
+                let _ = self.send(&control::display_power(true));
+                let _ = self.send(&control::keycode(0, KEYCODE_SLEEP, 0, 0));
+                let _ = self.send(&control::keycode(1, KEYCODE_SLEEP, 0, 0));
+                thread::sleep(Duration::from_millis(250));
+            }
+            // Someone has the phone in hand: make sure its screen is on.
+            StopKind::PhoneUsed => {
+                let _ = self.send(&control::display_power(true));
+                thread::sleep(Duration::from_millis(100));
+            }
+            _ => {}
+        }
+        if let Ok(mut watcher) = self.use_watcher.lock() {
+            if let Some(mut child) = watcher.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
         let _ = self.video.shutdown(Shutdown::Both);
         if let Ok(c) = self.control.lock() {
             let _ = c.shutdown(Shutdown::Both);
@@ -112,6 +172,29 @@ pub struct VideoOptions {
     pub codec_options: String,
 }
 
+/// Session behavior chosen in the UI.
+#[derive(Deserialize, Clone, Copy, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOptions {
+    /// Keep the phone's own screen dark while mirroring.
+    #[serde(default)]
+    pub screen_off_mode: bool,
+    /// Stop mirroring as soon as someone touches the phone or its buttons.
+    #[serde(default)]
+    pub stop_on_use: bool,
+}
+
+/// Why a session ends; decides what happens to the phone's screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopKind {
+    /// Stop button or app quit: lock the phone if its screen was kept off.
+    User,
+    /// Someone picked up the phone: leave it unlocked with the screen on.
+    PhoneUsed,
+    /// Connection lost, or replaced by a new session: no extra action.
+    Quiet,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartInfo {
@@ -121,7 +204,7 @@ pub struct StartInfo {
 
 /// Stop the current session. With `only_id`, stop it only if it is that session.
 /// Returns whether a session was stopped.
-pub fn stop(state: &MirrorState, only_id: Option<u64>) -> bool {
+pub fn stop(state: &MirrorState, only_id: Option<u64>, kind: StopKind) -> bool {
     let session = {
         let mut current = state.current.lock().unwrap();
         match (current.as_ref(), only_id) {
@@ -130,7 +213,7 @@ pub fn stop(state: &MirrorState, only_id: Option<u64>) -> bool {
             _ => current.take().unwrap(),
         }
     };
-    session.shutdown();
+    session.shutdown(kind);
     true
 }
 
@@ -243,7 +326,7 @@ pub fn start(
     app: &AppHandle,
     serial: &str,
     video: VideoOptions,
-    screen_off_mode: bool,
+    options: SessionOptions,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<StartInfo, String> {
     let (jar, version) = locate_server()?;
@@ -257,7 +340,7 @@ pub fn start(
         &["forward", &local, &format!("localabstract:scrcpy_{scid:08x}")],
     )?;
 
-    let result = launch(app, serial, &version, scid, port, video, screen_off_mode, channel);
+    let result = launch(app, serial, &version, scid, port, video, options, channel);
     if result.is_err() {
         let _ = adb::run(Some(serial), &["forward", "--remove", &local]);
     }
@@ -271,7 +354,7 @@ fn launch(
     scid: u32,
     port: u16,
     video: VideoOptions,
-    screen_off_mode: bool,
+    options: SessionOptions,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<StartInfo, String> {
     let mut cmd = adb::command(Some(serial))?;
@@ -290,9 +373,10 @@ fn launch(
     if !codec_options.is_empty() {
         cmd.arg(format!("video_codec_options={codec_options}"));
     }
-    if screen_off_mode {
-        // Lock the phone (screen off) when the server exits.
-        cmd.arg("power_off_on_close=true");
+    if options.screen_off_mode {
+        // No power_off_on_close: the phone must not lock when mirroring stops
+        // because someone picked it up. Locking on a user stop is done in
+        // Session::shutdown instead.
         // With the display dark nobody touches the phone itself, so its own
         // screen timeout (often 30 s) would put it to sleep mid-session:
         // video freezes and the phone locks. The server raises the timeout
@@ -355,6 +439,10 @@ fn launch(
         clipboard_seq: AtomicU64::new(1),
         screen_off: AtomicBool::new(false),
         off_pending: AtomicBool::new(false),
+        started: Instant::now(),
+        use_watcher: Mutex::new(None),
+        lock_state: AtomicU8::new(LOCK_UNKNOWN),
+        unlocked_at: Mutex::new(None),
     });
 
     *app.state::<MirrorState>().current.lock().unwrap() = Some(session.clone());
@@ -362,6 +450,9 @@ fn launch(
     spawn_video_reader(app.clone(), session.id, video, channel);
     spawn_device_reader(control);
     spawn_phone_watcher(app.clone(), session.clone());
+    if options.stop_on_use {
+        spawn_use_watcher(app.clone(), session.clone());
+    }
 
     Ok(StartInfo {
         device_name,
@@ -381,7 +472,7 @@ fn spawn_video_reader(
             Err(e) => e,
         };
         // Stopped by the user? Then the session is already gone and nothing is emitted.
-        if stop(&app.state::<MirrorState>(), Some(session_id)) {
+        if stop(&app.state::<MirrorState>(), Some(session_id), StopKind::Quiet) {
             let _ = app.emit("mirror-closed", reason);
         }
     });
@@ -408,6 +499,11 @@ fn spawn_phone_watcher(app: AppHandle, session: Arc<Session>) {
             if last != Some(state) {
                 let _ = app.emit("phone-state", state);
             }
+            let locked = state.locked || !state.awake;
+            let new = if locked { LOCK_LOCKED } else { LOCK_UNLOCKED };
+            if session.lock_state.swap(new, Ordering::Relaxed) == LOCK_LOCKED && !locked {
+                *session.unlocked_at.lock().unwrap() = Some(Instant::now());
+            }
             let unlocked_now = last.is_some_and(|l| l.locked) && !state.locked;
             if unlocked_now && session.screen_off.load(Ordering::Relaxed) {
                 session.off_pending.store(true, Ordering::Relaxed);
@@ -423,6 +519,65 @@ fn spawn_phone_watcher(app: AppHandle, session: Arc<Session>) {
                 }
             }
             last = Some(state);
+        }
+    });
+}
+
+/// Stops mirroring when the phone itself is used. `getevent` reads the
+/// phone's built-in touchscreen and hardware keys at the kernel level, where
+/// input injected from the Mac never appears, so any event means a person is
+/// touching the phone.
+fn spawn_use_watcher(app: AppHandle, session: Arc<Session>) {
+    thread::spawn(move || {
+        let unavailable = |why: String| {
+            let _ = app.emit("use-watch-unavailable", why);
+        };
+        let devices = match adb::physical_input_devices(&session.serial) {
+            Ok(d) if !d.is_empty() => d,
+            Ok(_) => return unavailable("no built-in touchscreen or buttons found".into()),
+            Err(e) => return unavailable(e),
+        };
+        let mut cmd = match adb::command(Some(&session.serial)) {
+            Ok(c) => c,
+            Err(e) => return unavailable(e),
+        };
+        // getevent takes only one device, so read all of them and keep the
+        // phone's own touchscreen/buttons, filtering on the phone so idle
+        // sensors never cross the link.
+        let script = format!(
+            "getevent -q | grep --line-buffered -E '^({}): '",
+            devices.join("|")
+        );
+        let mut child = match cmd
+            .args(["shell", &script])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => return unavailable(format!("getevent: {e}")),
+        };
+        let stdout = child.stdout.take();
+        *session.use_watcher.lock().unwrap() = Some(child);
+        // The session may have ended while getevent was starting.
+        if !current(&app).map(|s| s.id == session.id).unwrap_or(false) {
+            if let Some(mut c) = session.use_watcher.lock().unwrap().take() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            return;
+        }
+        let Some(stdout) = stdout else { return };
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            // Only real event lines ("/dev/input/eventN: type code value"),
+            // never error or usage text.
+            if !line.starts_with("/dev/input/") || !session.physical_input_counts() {
+                continue;
+            }
+            if stop(&app.state::<MirrorState>(), Some(session.id), StopKind::PhoneUsed) {
+                let _ = app.emit("phone-used", ());
+            }
+            break;
         }
     });
 }
@@ -529,4 +684,26 @@ pub fn current(app: &AppHandle) -> Result<Arc<Session>, String> {
 pub fn send_key_press(session: &Session, keycode: u32) -> Result<(), String> {
     session.send(&control::keycode(0, keycode, 0, 0))?;
     session.send(&control::keycode(1, keycode, 0, 0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const S: fn(u64) -> Duration = Duration::from_secs;
+
+    #[test]
+    fn physical_input_rules() {
+        // Unlocked, long after start and unlock: counts.
+        assert!(input_counts(S(30), LOCK_UNLOCKED, None));
+        assert!(input_counts(S(30), LOCK_UNLOCKED, Some(S(5))));
+        // Locked or asleep: waking, fingerprint, PIN don't count.
+        assert!(!input_counts(S(30), LOCK_LOCKED, None));
+        // State not polled yet: don't guess.
+        assert!(!input_counts(S(30), LOCK_UNKNOWN, None));
+        // Just unlocked by hand: finger lifting / swipe-up don't count.
+        assert!(!input_counts(S(30), LOCK_UNLOCKED, Some(Duration::from_millis(800))));
+        // First seconds of the session: the hand that just started it.
+        assert!(!input_counts(S(1), LOCK_UNLOCKED, None));
+    }
 }

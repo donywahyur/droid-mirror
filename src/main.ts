@@ -63,6 +63,7 @@ const deviceList = $<HTMLUListElement>("device-list");
 const emptyEl = $<HTMLElement>("empty");
 const qualitySelect = $<HTMLSelectElement>("quality");
 const screenOffPref = $<HTMLInputElement>("screen-off-pref");
+const stopOnUsePref = $<HTMLInputElement>("stop-on-use-pref");
 const statusEl = $<HTMLElement>("status");
 const canvas = $<HTMLCanvasElement>("screen");
 const stage = $<HTMLElement>("stage");
@@ -110,6 +111,8 @@ function savePref(key: string, value: string) {
 
 let screenOff = loadPref("screenOff") === "1";
 let pinned = loadPref("pinned") === "1";
+let stopOnUse = loadPref("stopOnUse") !== "0"; // on unless turned off
+stopOnUsePref.checked = stopOnUse;
 qualitySelect.value = loadPref("quality") ?? "auto";
 
 // --------------------------------------------------------------- status ----
@@ -404,7 +407,7 @@ async function startMirror(dev: Device) {
     const info = await invoke<StartInfo>("start_mirror", {
       serial: dev.serial,
       video: videoOptions(dev),
-      screenOffMode: screenOff,
+      options: { screenOffMode: screenOff, stopOnUse },
       onPacket: channel,
     });
     mirroring = true;
@@ -469,6 +472,10 @@ new ResizeObserver(fitCanvas).observe(stage);
 $("refresh").addEventListener("click", () => refreshDevices(true));
 qualitySelect.addEventListener("change", () => savePref("quality", qualitySelect.value));
 screenOffPref.addEventListener("change", () => setScreenOff(screenOffPref.checked));
+stopOnUsePref.addEventListener("change", () => {
+  stopOnUse = stopOnUsePref.checked;
+  savePref("stopOnUse", stopOnUse ? "1" : "0");
+});
 screenOffBtn.addEventListener("click", () => setScreenOff(!screenOff));
 pinBtn.addEventListener("click", () => {
   pinned = !pinned;
@@ -516,6 +523,16 @@ listen<PhoneState>("phone-state", ({ payload: s }) => {
 });
 
 listen("screen-off-applied", () => setStatus("Phone screen off"));
+
+// Someone touched the phone itself (Rust already stopped the session).
+listen("phone-used", () => {
+  leaveMirror();
+  setStatus("Stopped: the phone was used", false, false);
+});
+
+listen<string>("use-watch-unavailable", (e) =>
+  setStatus(`Can't detect phone use, so mirroring won't stop by itself: ${e.payload}`, true),
+);
 
 listen<string>("mirror-closed", (e) => {
   leaveMirror();

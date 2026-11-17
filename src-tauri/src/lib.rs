@@ -2,7 +2,7 @@ mod adb;
 mod control;
 mod mirror;
 
-use mirror::{MirrorState, StartInfo, VideoOptions};
+use mirror::{MirrorState, SessionOptions, StartInfo, StopKind, VideoOptions};
 use std::thread;
 use std::time::Duration;
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -67,12 +67,12 @@ async fn start_mirror(
     app: AppHandle,
     serial: String,
     video: VideoOptions,
-    screen_off_mode: bool,
+    options: SessionOptions,
     on_packet: Channel<InvokeResponseBody>,
 ) -> Res<StartInfo> {
     blocking(move || {
-        mirror::stop(&app.state::<MirrorState>(), None);
-        mirror::start(&app, &serial, video, screen_off_mode, on_packet)
+        mirror::stop(&app.state::<MirrorState>(), None, StopKind::Quiet);
+        mirror::start(&app, &serial, video, options, on_packet)
     })
     .await
 }
@@ -80,7 +80,7 @@ async fn start_mirror(
 #[tauri::command]
 async fn stop_mirror(app: AppHandle) -> Res<()> {
     blocking(move || {
-        mirror::stop(&app.state::<MirrorState>(), None);
+        mirror::stop(&app.state::<MirrorState>(), None, StopKind::User);
         Ok(())
     })
     .await
@@ -190,7 +190,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                mirror::stop(&app.state::<MirrorState>(), None);
+                mirror::stop(&app.state::<MirrorState>(), None, StopKind::User);
             }
         });
 }

@@ -50,7 +50,8 @@ pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
   debugging on the phone" or "Offline" appear underneath. Click a card to
   mirror it. USB cards have a **Wi-Fi** button (`adb tcpip 5555`), and wireless
   cards have **✕** to disconnect. *Add a device by address* connects or pairs by
-  ip:port. Quality and *Turn phone screen off* are remembered.
+  ip:port. Quality, *Turn phone screen off* and *Stop when the phone is used*
+  are remembered.
 - **Mirror view:** the phone fills the window, with nothing on top of it. A
   thin top bar holds the window buttons, the device name (drag it to move the
   window), and fps and delay. A column on the right is always visible: Back,
@@ -85,13 +86,33 @@ Mac. Turn it on before you start mirroring. The setting is remembered.
   unlock. Waking the phone with its own power button leaves it on.
 - For the session, the phone's screen timeout is raised to 30 minutes, so
   the phone doesn't fall asleep while dark. scrcpy-server restores your setting
-  when mirroring stops, and the phone locks (`power_off_on_close`).
+  when mirroring stops.
+- Pressing ■ stop (or quitting the app) locks the phone: the app sends
+  Android's sleep key (`KEYCODE_SLEEP`). It doesn't use scrcpy's
+  `power_off_on_close`, which would also lock the phone when mirroring stops
+  because you picked it up.
 - While mirroring, the app checks once a second whether the phone is locked or
   asleep (`dumpsys`, filtered on the phone) and says so instead of showing a
   black picture.
 
 A dark screen is not a lock. Until mirroring stops, anyone holding the phone
 can press its power button and get in unlocked.
+
+## Stop when the phone is used
+
+With *Stop when the phone is used* on (the default), touching the phone
+itself or pressing its buttons ends mirroring. The phone then stays unlocked
+with its screen on, and the Mac shows "Stopped: the phone was used".
+
+- **Detection:** `adb shell getevent` reads the phone's built-in touchscreen
+  and hardware keys at the kernel level. Taps and keys sent from the Mac are
+  injected through Android's InputManager and never appear there. Bluetooth
+  and USB peripherals (a watch, a keyboard) and sensors (proximity, light,
+  cover) are skipped. Filtering happens on the phone, so idle devices send
+  nothing over the link.
+- **Not counted:** input while the phone is locked or asleep (waking it,
+  fingerprint, PIN), input for about 2 s after it is unlocked by hand, and
+  input in the first 3 s of a session.
 
 ## Wi-Fi
 
