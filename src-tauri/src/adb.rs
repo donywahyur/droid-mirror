@@ -79,7 +79,71 @@ pub struct Device {
     pub wireless: bool,
 }
 
+/// Connected devices, plus phones advertising Android 11+ wireless debugging
+/// on the LAN (via adb's mDNS discovery) that are not connected yet. Those get
+/// state "available" and are connected with `connect` before mirroring.
 pub fn devices() -> Result<Vec<Device>, String> {
+    let mut list = connected_devices()?;
+    let services = mdns_services();
+
+    // Wireless debugging picks a new port whenever it restarts, leaving the old
+    // ip:port "offline". If the same IP now advertises another port, drop it.
+    let ip_of = |addr: &str| addr.rsplit_once(':').map(|(ip, _)| ip.to_string());
+    list.retain(|d| {
+        let stale = d.wireless
+            && d.state == "offline"
+            && services
+                .iter()
+                .any(|(_, addr)| *addr != d.serial && ip_of(addr) == ip_of(&d.serial));
+        if stale {
+            let _ = disconnect(&d.serial);
+        }
+        !stale
+    });
+
+    for (name, addr) in services {
+        if list.iter().any(|d| d.serial == addr) {
+            continue;
+        }
+        // Instance names look like "adb-<serial>-<suffix>".
+        let usb_serial = name
+            .strip_prefix("adb-")
+            .and_then(|s| s.rsplit_once('-'))
+            .map(|(serial, _)| serial.to_string());
+        let model = usb_serial
+            .and_then(|s| list.iter().find(|d| d.serial == s))
+            .and_then(|d| d.model.clone());
+        list.push(Device {
+            serial: addr,
+            state: "available".into(),
+            model,
+            wireless: true,
+        });
+    }
+    Ok(list)
+}
+
+/// `adb mdns services` -> (instance name, ip:port) for wireless-debugging phones.
+fn mdns_services() -> Vec<(String, String)> {
+    match run(None, &["mdns", "services"]) {
+        Ok(out) => parse_mdns_services(&out),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn parse_mdns_services(out: &str) -> Vec<(String, String)> {
+    out.lines()
+        .filter(|l| l.contains("_adb-tls-connect._tcp"))
+        .filter_map(|l| {
+            let mut parts = l.split_whitespace();
+            let name = parts.next()?.to_string();
+            let addr = parts.last()?.to_string();
+            addr.contains(':').then_some((name, addr))
+        })
+        .collect()
+}
+
+fn connected_devices() -> Result<Vec<Device>, String> {
     let out = run(None, &["devices", "-l"])?;
     Ok(out
         .lines()
@@ -142,4 +206,20 @@ pub fn pair(addr: &str, code: &str) -> Result<String, String> {
 
 pub fn disconnect(addr: &str) -> Result<String, String> {
     run(None, &["disconnect", addr]).map(|s| s.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_mdns_services() {
+        let out = "List of discovered mdns services\n\
+                   adb-RRCY507DB0Y-ID0FJZ\t_adb-tls-connect._tcp\t192.168.100.125:41933\n\
+                   adb-RRCY507DB0Y-ID0FJZ\t_adb-tls-pairing._tcp\t192.168.100.125:37011\n";
+        assert_eq!(
+            parse_mdns_services(out),
+            vec![("adb-RRCY507DB0Y-ID0FJZ".to_string(), "192.168.100.125:41933".to_string())]
+        );
+    }
 }

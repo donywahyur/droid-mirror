@@ -12,11 +12,13 @@
     <header class="toolbar">
       <select id="device" title="Device"></select>
       <button id="refresh" class="icon" title="Refresh devices">↻</button>
-      <select id="size" title="Max video size">
-        <option value="1024">1024p</option>
-        <option value="1280">1280p</option>
-        <option value="1920" selected>1920p</option>
-        <option value="0">Native</option>
+      <select id="quality" title="Video quality (Auto: High over USB, Low over Wi-Fi)">
+        <option value="auto" selected>Auto</option>
+        <option value="minimal">Minimal · 800p 1 Mbps</option>
+        <option value="low">Low · 1024p 2 Mbps</option>
+        <option value="medium">Medium · 1280p 4 Mbps</option>
+        <option value="high">High · 1920p 8 Mbps</option>
+        <option value="max">Max · native 16 Mbps</option>
       </select>
       <button id="mirror" class="primary">Mirror</button>
       <button id="wifi-toggle" class="icon" title="Wi-Fi connection" aria-expanded="false">Wi-Fi</button>

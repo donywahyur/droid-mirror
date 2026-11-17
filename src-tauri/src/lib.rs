@@ -2,7 +2,7 @@ mod adb;
 mod control;
 mod mirror;
 
-use mirror::{MirrorState, StartInfo};
+use mirror::{MirrorState, StartInfo, VideoOptions};
 use std::thread;
 use std::time::Duration;
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -66,12 +66,12 @@ async fn enable_wifi(serial: String) -> Res<String> {
 async fn start_mirror(
     app: AppHandle,
     serial: String,
-    max_size: u32,
+    video: VideoOptions,
     on_packet: Channel<InvokeResponseBody>,
 ) -> Res<StartInfo> {
     blocking(move || {
         mirror::stop(&app.state::<MirrorState>(), None);
-        mirror::start(&app, &serial, max_size, on_packet)
+        mirror::start(&app, &serial, video, on_packet)
     })
     .await
 }
@@ -150,6 +150,12 @@ fn copy_to_mac(app: AppHandle) -> Res<()> {
     mirror::current(&app)?.send(&control::get_clipboard(control::COPY_KEY_COPY))
 }
 
+/// Webview timing stats, printed to the terminal running the app.
+#[tauri::command]
+fn log_stats(line: String) {
+    eprintln!("[stats] {line} socketGapMax={}ms", mirror::take_socket_gap_ms());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -170,6 +176,7 @@ pub fn run() {
             device_action,
             paste_from_mac,
             copy_to_mac,
+            log_stats,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

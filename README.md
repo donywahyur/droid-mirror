@@ -59,11 +59,29 @@ pnpm tauri build   # .app / .dmg in src-tauri/target/release/bundle
 
 ## Wi-Fi
 
+- **Android 11+ wireless debugging:** phones with Wireless debugging on are
+  found automatically on the local network (adb mDNS) and listed as
+  "found on network". Pressing *Mirror* connects first. A phone that was never
+  paired with this Mac needs *Wi-Fi → Pair* once (pairing ip:port and code).
 - **USB first:** select the USB device, then click *Wi-Fi → Switch selected USB
   device to Wi-Fi*. This runs `adb tcpip 5555` and then `adb connect <ip>:5555`.
   After that you can unplug the cable.
-- **Android 11+ wireless debugging:** use *Pair* with the pairing ip:port and
-  code, then *Connect* to the ip:port on the Wireless debugging screen.
+
+## Quality and lag
+
+The quality menu sets the size, bitrate and frame-rate cap. *Auto* uses High
+(1920p, 8 Mbps, 60 fps) over USB and Low (1024p, 2 Mbps, 30 fps) over Wi-Fi.
+A stream above the link's throughput queues up in network buffers as growing
+lag.
+
+The status bar shows `fps · size · +delay`. The delay is transit time above
+the fastest frame so far, and it turns red above 300 ms. Each second the app
+also prints a `[stats]` line to its terminal: arrival and decode counts,
+transit, decode time, decoder queue, and the largest packet gap both at the
+socket (`socketGapMax`) and in the webview (`arrivalGapMax`).
+
+Most Wi-Fi lag is the network itself: crowded 2.4 GHz, and two hops through
+the router. 5 GHz or USB helps far more than lower quality.
 
 Port 5555 stays open on your LAN until the phone reboots. adb still requires
 the RSA key you approved, but use it only on trusted networks.

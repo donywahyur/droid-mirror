@@ -9,7 +9,7 @@
 //!                   device -> client device messages (clipboard, ...).
 
 use crate::{adb, control};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -27,6 +27,15 @@ const CODEC_H264: u32 = 0x6832_3634; // "h264"
 const DEVICE_NAME_LEN: usize = 64;
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Largest gap between video packets read from the socket since the last
+/// `take_socket_gap_ms()` call. Compared with the webview's arrival gaps, it
+/// shows whether bursts come from the network or from the IPC to the webview.
+static SOCKET_GAP_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+pub fn take_socket_gap_ms() -> u64 {
+    SOCKET_GAP_MAX_US.swap(0, Ordering::Relaxed) / 1000
+}
 
 #[derive(Default)]
 pub struct MirrorState {
@@ -67,6 +76,16 @@ impl Session {
             &["forward", "--remove", &format!("tcp:{}", self.port)],
         );
     }
+}
+
+/// Encoder settings passed to scrcpy-server. 0 means "server default / no limit".
+#[derive(Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoOptions {
+    pub max_size: u32,
+    /// bits per second
+    pub bit_rate: u32,
+    pub max_fps: u32,
 }
 
 #[derive(Serialize)]
@@ -199,7 +218,7 @@ fn read_stream_header(video: &mut TcpStream) -> Result<String, String> {
 pub fn start(
     app: &AppHandle,
     serial: &str,
-    max_size: u32,
+    video: VideoOptions,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<StartInfo, String> {
     let (jar, version) = locate_server()?;
@@ -213,7 +232,7 @@ pub fn start(
         &["forward", &local, &format!("localabstract:scrcpy_{scid:08x}")],
     )?;
 
-    let result = launch(app, serial, &version, scid, port, max_size, channel);
+    let result = launch(app, serial, &version, scid, port, video, channel);
     if result.is_err() {
         let _ = adb::run(Some(serial), &["forward", "--remove", &local]);
     }
@@ -226,15 +245,22 @@ fn launch(
     version: &str,
     scid: u32,
     port: u16,
-    max_size: u32,
+    video: VideoOptions,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<StartInfo, String> {
-    let mut child = adb::command(Some(serial))?
-        .arg("shell")
+    let mut cmd = adb::command(Some(serial))?;
+    cmd.arg("shell")
         .arg(format!("CLASSPATH={DEVICE_JAR}"))
         .args(["app_process", "/", "com.genymobile.scrcpy.Server", version])
         .arg(format!("scid={scid:08x}"))
-        .arg(format!("max_size={max_size}"))
+        .arg(format!("max_size={}", video.max_size));
+    if video.bit_rate > 0 {
+        cmd.arg(format!("video_bit_rate={}", video.bit_rate));
+    }
+    if video.max_fps > 0 {
+        cmd.arg(format!("max_fps={}", video.max_fps));
+    }
+    let mut child = cmd
         .args([
             "log_level=info",
             "tunnel_forward=true",
@@ -322,6 +348,7 @@ fn spawn_video_reader(
 /// Forward each packet (12-byte header + payload) to the webview unchanged.
 fn pump_video(video: &mut TcpStream, channel: &Channel<InvokeResponseBody>) -> Result<(), String> {
     let mut header = [0u8; 12];
+    let mut last_packet: Option<Instant> = None;
     loop {
         if let Err(e) = video.read_exact(&mut header) {
             return match e.kind() {
@@ -338,6 +365,12 @@ fn pump_video(video: &mut TcpStream, channel: &Channel<InvokeResponseBody>) -> R
             video
                 .read_exact(&mut buf[12..])
                 .map_err(|e| format!("video stream: {e}"))?;
+            let now = Instant::now();
+            if let Some(prev) = last_packet {
+                let gap = now.duration_since(prev).as_micros() as u64;
+                SOCKET_GAP_MAX_US.fetch_max(gap, Ordering::Relaxed);
+            }
+            last_packet = Some(now);
             buf
         };
         channel

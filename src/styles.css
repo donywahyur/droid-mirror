@@ -171,6 +171,14 @@ input.short {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#status.error {
+#status.error,
+#fps.warn {
   color: var(--error);
+}
+#fps {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+#quality {
+  max-width: 92px;
 }

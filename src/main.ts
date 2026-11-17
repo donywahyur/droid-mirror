@@ -15,10 +15,31 @@ interface StartInfo {
   serial: string;
 }
 
+interface VideoOptions {
+  maxSize: number;
+  bitRate: number;
+  maxFps: number;
+}
+
+const QUALITY: Record<string, VideoOptions> = {
+  minimal: { maxSize: 800, bitRate: 1_000_000, maxFps: 30 },
+  low: { maxSize: 1024, bitRate: 2_000_000, maxFps: 30 },
+  medium: { maxSize: 1280, bitRate: 4_000_000, maxFps: 60 },
+  high: { maxSize: 1920, bitRate: 8_000_000, maxFps: 60 },
+  max: { maxSize: 0, bitRate: 16_000_000, maxFps: 0 },
+};
+
+/** Auto: Wi-Fi rarely sustains the 8 Mbps USB default, and a stream above
+ * the link's throughput queues up in network buffers as ever-growing lag. */
+function videoOptions(dev: Device): VideoOptions {
+  const choice = qualitySelect.value;
+  return QUALITY[choice] ?? (dev.wireless ? QUALITY.low : QUALITY.high);
+}
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const deviceSelect = $<HTMLSelectElement>("device");
-const sizeSelect = $<HTMLSelectElement>("size");
+const qualitySelect = $<HTMLSelectElement>("quality");
 const mirrorBtn = $<HTMLButtonElement>("mirror");
 const refreshBtn = $<HTMLButtonElement>("refresh");
 const wifiToggle = $<HTMLButtonElement>("wifi-toggle");
@@ -55,9 +76,10 @@ function updateUi() {
   const dev = selectedDevice();
   mirrorBtn.textContent = mirroring ? "Stop" : busy ? "Starting…" : "Mirror";
   mirrorBtn.classList.toggle("stop", mirroring);
-  mirrorBtn.disabled = busy || (!mirroring && dev?.state !== "device");
+  const canStart = dev?.state === "device" || dev?.state === "available";
+  mirrorBtn.disabled = busy || (!mirroring && !canStart);
   deviceSelect.disabled = mirroring || busy;
-  sizeSelect.disabled = mirroring || busy;
+  qualitySelect.disabled = mirroring || busy;
   canvas.hidden = !mirroring;
   placeholder.hidden = mirroring;
   $<HTMLButtonElement>("wifi-enable").disabled = !dev || dev.wireless || dev.state !== "device";
@@ -88,7 +110,13 @@ async function refreshDevices(prefer?: string) {
     ...devices.map((d) => {
       const label = `${d.model ?? d.serial}${d.wireless ? " (Wi-Fi)" : " (USB)"}`;
       const suffix =
-        d.state === "device" ? "" : d.state === "unauthorized" ? " – allow USB debugging on phone" : ` – ${d.state}`;
+        d.state === "device"
+          ? ""
+          : d.state === "available"
+            ? ` – ${d.model ? d.serial + ", " : ""}found on network`
+            : d.state === "unauthorized"
+              ? " – allow USB debugging on phone"
+              : ` – ${d.state}`;
       return new Option(label + suffix, d.serial);
     }),
   );
@@ -102,6 +130,20 @@ async function startMirror() {
   if (!dev) return;
   busy = true;
   updateUi();
+  if (dev.state === "available") {
+    setStatus(`Connecting to ${dev.serial} over Wi-Fi…`);
+    try {
+      await invoke<string>("adb_connect", { addr: dev.serial });
+    } catch (e) {
+      busy = false;
+      setStatus(
+        `${errorText(e)} – if this phone was never paired with this Mac, use Wi-Fi → Pair first.`,
+        true,
+      );
+      await refreshDevices();
+      return;
+    }
+  }
   setStatus(`Starting scrcpy-server on ${dev.model ?? dev.serial}…`);
   player.reset();
 
@@ -115,7 +157,7 @@ async function startMirror() {
   try {
     const info = await invoke<StartInfo>("start_mirror", {
       serial: dev.serial,
-      maxSize: Number(sizeSelect.value),
+      video: videoOptions(dev),
       onPacket: channel,
     });
     mirroring = true;
@@ -162,6 +204,8 @@ async function runAdb(label: string, cmd: string, args: Record<string, unknown>)
 // ---- wiring ----
 
 player.onResize = () => fit();
+player.onConfig = (sps, codec) =>
+  invoke("log_stats", { line: `config codec=${codec} sps=${sps} size=${player.width}x${player.height}` }).catch(() => {});
 player.onNeedKeyFrame = (reason) => {
   const now = performance.now();
   if (now - lastReset < 1000) return;
@@ -224,7 +268,15 @@ listen<string>("mirror-closed", (e) => {
 });
 
 setInterval(() => {
-  fpsEl.textContent = mirroring ? `${player.fps} fps · ${player.width}×${player.height}` : "";
+  if (!mirroring) {
+    fpsEl.textContent = "";
+    return;
+  }
+  invoke("log_stats", { line: player.takeStats() }).catch(() => {});
+  const delay = Math.round(player.delayMs);
+  fpsEl.textContent = `${player.fps} fps · ${player.width}×${player.height} · +${delay} ms`;
+  fpsEl.title = "Delay: extra time frames spend in transit compared to the fastest frame so far";
+  fpsEl.classList.toggle("warn", delay > 300);
 }, 1000);
 
 // Poll for plugged/unplugged devices while idle.
