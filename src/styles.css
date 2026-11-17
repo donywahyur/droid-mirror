@@ -1,0 +1,176 @@
+:root {
+  --bg: #111316;
+  --panel: #1b1e23;
+  --border: #2c3038;
+  --text: #e6e8eb;
+  --muted: #8b929c;
+  --accent: #3ddc84;
+  --accent-text: #08240f;
+  --error: #ff6b6b;
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button,
+select,
+input {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  min-height: 28px;
+}
+
+button {
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+button:disabled,
+select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+button.primary.stop {
+  background: var(--error);
+  border-color: var(--error);
+  color: #2a0505;
+}
+input {
+  user-select: text;
+  -webkit-user-select: text;
+  min-width: 0;
+  flex: 1;
+}
+input.short {
+  flex: 0 0 80px;
+}
+
+.toolbar,
+.navbar,
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border-color: var(--border);
+}
+.toolbar {
+  border-bottom: 1px solid var(--border);
+}
+.toolbar #device {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.panel[hidden] {
+  display: none;
+}
+.row {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+}
+.row > button:only-child,
+.row > button:first-child:not(:last-child) {
+  flex: 1;
+}
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+#stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #000;
+}
+#screen {
+  outline: none;
+  cursor: default;
+  touch-action: none;
+}
+#screen[hidden],
+#placeholder[hidden] {
+  display: none;
+}
+#placeholder {
+  max-width: 280px;
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.navbar {
+  justify-content: center;
+  border-top: 1px solid var(--border);
+}
+.navbar button {
+  min-width: 36px;
+}
+.navbar .sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.statusbar {
+  justify-content: space-between;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  border-top: 1px solid var(--border);
+}
+#status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#status.error {
+  color: var(--error);
+}

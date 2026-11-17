@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Droid Mirror</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <header class="toolbar">
+      <select id="device" title="Device"></select>
+      <button id="refresh" class="icon" title="Refresh devices">↻</button>
+      <select id="size" title="Max video size">
+        <option value="1024">1024p</option>
+        <option value="1280">1280p</option>
+        <option value="1920" selected>1920p</option>
+        <option value="0">Native</option>
+      </select>
+      <button id="mirror" class="primary">Mirror</button>
+      <button id="wifi-toggle" class="icon" title="Wi-Fi connection" aria-expanded="false">Wi-Fi</button>
+    </header>
+
+    <section id="wifi-panel" class="panel" hidden>
+      <div class="row">
+        <button id="wifi-enable" title="Runs adb tcpip 5555 on the selected USB device, then connects to it over Wi-Fi">
+          Switch selected USB device to Wi-Fi
+        </button>
+        <button id="wifi-disconnect" title="adb disconnect the selected wireless device">Disconnect wireless</button>
+      </div>
+      <form id="connect-form" class="row">
+        <input id="connect-addr" placeholder="192.168.1.20:5555" autocomplete="off" spellcheck="false" />
+        <button type="submit">Connect</button>
+      </form>
+      <form id="pair-form" class="row">
+        <input id="pair-addr" placeholder="Pairing ip:port" autocomplete="off" spellcheck="false" />
+        <input id="pair-code" placeholder="Code" inputmode="numeric" autocomplete="off" class="short" />
+        <button type="submit">Pair</button>
+      </form>
+      <p class="hint">
+        Android 11+: Developer options → Wireless debugging → “Pair device with pairing code”, pair here, then
+        Connect to the ip:port shown on the Wireless debugging screen.
+      </p>
+    </section>
+
+    <main id="stage">
+      <canvas id="screen" tabindex="0" hidden></canvas>
+      <div id="placeholder">
+        <p>Connect an Android device with USB debugging enabled, then press <b>Mirror</b>.</p>
+      </div>
+    </main>
+
+    <nav class="navbar">
+      <button data-key="4" title="Back (right click)">◁</button>
+      <button data-key="3" title="Home (middle click)">○</button>
+      <button data-key="187" title="Recent apps">▢</button>
+      <span class="sep"></span>
+      <button data-key="25" title="Volume down">🔉</button>
+      <button data-key="24" title="Volume up">🔊</button>
+      <button data-key="26" title="Power">⏻</button>
+      <span class="sep"></span>
+      <button data-action="rotate" title="Rotate">⟳</button>
+      <button data-action="notifications" title="Notifications">☰</button>
+    </nav>
+
+    <footer class="statusbar">
+      <span id="status">Idle</span>
+      <span id="fps"></span>
+    </footer>
+  </body>
+</html>
