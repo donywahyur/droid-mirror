@@ -118,6 +118,16 @@ Mac. Turn it on before you start mirroring. The setting is remembered.
 A dark screen is not a lock. Until mirroring stops, anyone holding the phone
 can press its power button and get in unlocked.
 
+## Protected screens
+
+Apps can mark a screen as protected (Android's `FLAG_SECURE`), for example
+WhatsApp view-once photos, banking apps and some video players. Android blanks
+those windows in any screen capture, so they mirror as black. Seeing them would
+need system-level access (root), and the app doesn't try to work around the
+protection. While mirroring, the once-a-second phone check also looks for a
+visible secure window (`dumpsys window`, filtered with `awk` on the phone). If
+it finds one, the mirror shows a notice to view that screen on the phone.
+
 ## Stop when the phone is used
 
 With *Stop when the phone is used* on (the default), touching the phone

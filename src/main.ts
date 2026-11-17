@@ -29,6 +29,8 @@ interface VideoOptions {
 interface PhoneState {
   locked: boolean;
   awake: boolean;
+  /** A visible window blocks capture (FLAG_SECURE): it mirrors as black. */
+  secure: boolean;
 }
 
 type Kind = "usb" | "wifi" | "tailscale";
@@ -555,6 +557,10 @@ listen<PhoneState>("phone-state", ({ payload: s }) => {
   if (!mirroring) return;
   if (!s.awake) {
     showHint("Phone is asleep. Press ⏻ to wake it.");
+  } else if (s.secure && !s.locked) {
+    showHint(
+      "This screen is protected by the app (for example a WhatsApp view-once photo), so it can't be mirrored. View it on the phone.",
+    );
   } else if (s.locked) {
     showHint(null);
     setStatus(screenOff ? "Phone is locked: unlock it here. Its screen turns off after you unlock." : "Phone is locked");

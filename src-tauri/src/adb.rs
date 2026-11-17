@@ -278,17 +278,21 @@ pub struct PhoneState {
     pub locked: bool,
     /// Screen awake (not dozing/asleep). An asleep phone mirrors as black.
     pub awake: bool,
+    /// A visible window is marked secure (FLAG_SECURE: WhatsApp view-once,
+    /// banking apps...). Android blanks such windows in screen capture.
+    pub secure: bool,
 }
 
-/// Lock and sleep state in one adb round trip. `grep` runs on the phone so
-/// only two short lines cross the (possibly slow) link.
+/// Lock, sleep and secure-window state in one adb round trip. Filtering
+/// (`grep`, `awk`) runs on the phone so only a few short lines cross the
+/// (possibly slow) link. The awk prints "secure" if any window that is
+/// visible has the SECURE flag (flags come before isVisible in each block).
 pub fn phone_state(serial: &str) -> Result<PhoneState, String> {
     let out = run(
         Some(serial),
         &[
             "shell",
-            "dumpsys activity activities | grep -m1 -o 'isKeyguardShowing=[a-z]*'; \
-             dumpsys power | grep -m1 -o 'mWakefulness=[A-Za-z]*'",
+            r#"dumpsys activity activities | grep -m1 -o 'isKeyguardShowing=[a-z]*'; dumpsys power | grep -m1 -o 'mWakefulness=[A-Za-z]*'; dumpsys window windows | awk '/^  Window #/{s=0} / SECURE( |$)/{s=1} /isVisible=true/{if(s){print "secure"; exit}}'"#,
         ],
     )?;
     parse_phone_state(&out)
@@ -297,15 +301,18 @@ pub fn phone_state(serial: &str) -> Result<PhoneState, String> {
 fn parse_phone_state(out: &str) -> Result<PhoneState, String> {
     let mut locked = None;
     let mut awake = None;
+    let mut secure = false;
     for line in out.lines().map(str::trim) {
-        if let Some(v) = line.strip_prefix("isKeyguardShowing=") {
+        if line == "secure" {
+            secure = true;
+        } else if let Some(v) = line.strip_prefix("isKeyguardShowing=") {
             locked = Some(v == "true");
         } else if let Some(v) = line.strip_prefix("mWakefulness=") {
             awake = Some(v == "Awake");
         }
     }
     match (locked, awake) {
-        (Some(locked), Some(awake)) => Ok(PhoneState { locked, awake }),
+        (Some(locked), Some(awake)) => Ok(PhoneState { locked, awake, secure }),
         _ => Err(format!("unexpected phone state output: {out:?}")),
     }
 }
@@ -396,11 +403,15 @@ add device 10: /dev/input/event4
     fn parses_phone_state() {
         assert_eq!(
             parse_phone_state("isKeyguardShowing=true\n  mWakefulness=Dozing\n"),
-            Ok(PhoneState { locked: true, awake: false })
+            Ok(PhoneState { locked: true, awake: false, secure: false })
         );
         assert_eq!(
             parse_phone_state("isKeyguardShowing=false\nmWakefulness=Awake\n"),
-            Ok(PhoneState { locked: false, awake: true })
+            Ok(PhoneState { locked: false, awake: true, secure: false })
+        );
+        assert_eq!(
+            parse_phone_state("isKeyguardShowing=false\nmWakefulness=Awake\nsecure\n"),
+            Ok(PhoneState { locked: false, awake: true, secure: true })
         );
         assert!(parse_phone_state("isKeyguardShowing=false\n").is_err());
     }
