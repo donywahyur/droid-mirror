@@ -29,6 +29,33 @@ async fn adb_connect(addr: String) -> Res<String> {
     blocking(move || adb::connect(&addr)).await
 }
 
+/// Reconnect saved wireless addresses that aren't connected (in parallel,
+/// 4 s each). An address adb still lists as "offline" is dropped first, since
+/// adb answers "already connected" for it. Returns the ones now connected.
+#[tauri::command]
+async fn reconnect(addrs: Vec<String>) -> Res<Vec<String>> {
+    blocking(move || {
+        let current = adb::devices().unwrap_or_default();
+        let handles: Vec<_> = addrs
+            .into_iter()
+            .filter_map(|addr| {
+                let state = current.iter().find(|d| d.serial == addr).map(|d| d.state.clone());
+                if state.as_deref() == Some("device") {
+                    return None; // already fine
+                }
+                Some(thread::spawn(move || {
+                    if state.is_some() {
+                        let _ = adb::disconnect(&addr);
+                    }
+                    adb::connect_with_timeout(&addr, Duration::from_secs(4)).ok().map(|_| addr)
+                }))
+            })
+            .collect();
+        Ok(handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn adb_pair(addr: String, code: String) -> Res<String> {
     blocking(move || adb::pair(&addr, &code)).await
@@ -262,6 +289,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_devices,
             adb_connect,
+            reconnect,
             adb_pair,
             adb_disconnect,
             enable_wifi,

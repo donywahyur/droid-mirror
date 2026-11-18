@@ -328,6 +328,43 @@ pub fn connect(addr: &str) -> Result<String, String> {
     }
 }
 
+/// `adb connect` that gives up after `timeout`, so an unreachable address
+/// (other network, phone off) doesn't block for adb's own long timeout.
+pub fn connect_with_timeout(addr: &str, timeout: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    let mut child = command(None)?
+        .args(["connect", addr])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to run adb: {e}"))?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{addr}: timed out"));
+            }
+        }
+    }
+    let mut msg = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut msg);
+    }
+    let msg = msg.trim().to_string();
+    // Matches "connected to x" and "already connected to x".
+    if msg.contains("connected to") && !msg.contains("failed") && !msg.contains("cannot") {
+        Ok(msg)
+    } else {
+        Err(msg)
+    }
+}
+
 /// `adb pair host:port code` (Android 11+ wireless debugging).
 pub fn pair(addr: &str, code: &str) -> Result<String, String> {
     let out = run(None, &["pair", addr, code])?;

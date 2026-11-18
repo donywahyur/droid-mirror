@@ -175,6 +175,17 @@ debugging and works on mobile data too:
    unplug.
 3. Repeat after each phone reboot, which closes port 5555.
 
+**Saved devices and auto-reconnect:** any phone seen connected on port 5555
+(Wi-Fi button, Connect form, Tailscale) is remembered. When the app starts,
+and every 15 s while the device list is open, it quietly reconnects saved
+addresses that aren't connected. Attempts run in parallel, 4 s each, because
+`adb connect` to an unreachable address can hang for 20 s or more. An address
+adb still lists as `offline` is dropped first. So after the Mac changes
+networks, the phone comes back by itself. A saved phone that can't be reached
+shows as "Saved · not connected"; click it to retry, or ✕ to forget it.
+Wireless-debugging addresses aren't saved: their port changes every time,
+and mDNS finds those phones on the local network.
+
 Port 5555 is then open on every network the phone joins, not only Tailscale.
 adb still requires the RSA key you approved, but reboot the phone before using
 public Wi-Fi.

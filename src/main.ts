@@ -114,6 +114,47 @@ function savePref(key: string, value: string) {
 let screenOff = loadPref("screenOff") === "1";
 let pinned = loadPref("pinned") === "1";
 let stopOnUse = loadPref("stopOnUse") !== "0"; // on unless turned off
+
+// ------------------------------------------------------- saved devices ----
+// Fixed-port addresses (adb tcpip 5555, e.g. over Tailscale) stay valid
+// across network changes until the phone reboots, so they're remembered and
+// reconnected automatically. Wireless-debugging ports change every time, and
+// mDNS finds those phones on the local network anyway: not saved.
+
+interface Saved {
+  addr: string;
+  model: string | null;
+}
+
+const isFixedPort = (addr: string) => /:5555$/.test(addr);
+
+let saved: Saved[] = (() => {
+  try {
+    const list = JSON.parse(loadPref("savedDevices") ?? "[]");
+    return Array.isArray(list) ? list.filter((x) => typeof x?.addr === "string") : [];
+  } catch {
+    return [];
+  }
+})();
+
+function persistSaved() {
+  savePref("savedDevices", JSON.stringify(saved));
+}
+
+function remember(addr: string, model: string | null) {
+  if (!isFixedPort(addr)) return;
+  const i = saved.findIndex((x) => x.addr === addr);
+  if (i >= 0 && (saved[i].model === model || model === null)) return;
+  const entry = { addr, model: model ?? null };
+  if (i >= 0) saved[i] = entry;
+  else saved.push(entry);
+  persistSaved();
+}
+
+function forget(addr: string) {
+  saved = saved.filter((x) => x.addr !== addr);
+  persistSaved();
+}
 stopOnUsePref.checked = stopOnUse;
 qualitySelect.value = loadPref("quality") ?? "auto";
 
@@ -175,6 +216,8 @@ function stateText(d: Device): { text: string; warn: boolean } {
       return { text: "", warn: false };
     case "available":
       return { text: "Found on network", warn: false };
+    case "saved":
+      return { text: "Saved · not connected", warn: false };
     case "unauthorized":
       return { text: "Allow USB debugging on the phone", warn: true };
     case "offline":
@@ -184,7 +227,7 @@ function stateText(d: Device): { text: string; warn: boolean } {
   }
 }
 
-const canMirror = (d: Device) => d.state === "device" || d.state === "available";
+const canMirror = (d: Device) => d.state === "device" || d.state === "available" || d.state === "saved";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) {
   const node = document.createElement(tag);
@@ -225,11 +268,17 @@ function renderDevices() {
       actions.append(wifi);
     }
     if (d.wireless && d.state !== "available") {
+      const isSaved = saved.some((x) => x.addr === d.serial);
       const x = el("button", "", "✕");
-      x.title = "Disconnect";
-      x.setAttribute("aria-label", `Disconnect ${d.serial}`);
+      x.title = isSaved ? "Disconnect and forget" : "Disconnect";
+      x.setAttribute("aria-label", `${x.title} ${d.serial}`);
       x.disabled = busySerial !== null;
-      x.addEventListener("click", () => runAdb("Disconnecting", "adb_disconnect", { addr: d.serial }));
+      x.addEventListener("click", () => {
+        // Forget first, or auto-reconnect would bring it straight back.
+        if (isSaved) forget(d.serial);
+        if (d.state === "saved") refreshDevices(true);
+        else runAdb("Disconnecting", "adb_disconnect", { addr: d.serial });
+      });
       actions.append(x);
     }
 
@@ -246,6 +295,14 @@ async function refreshDevices(force = false) {
   } catch (e) {
     devices = [];
     setStatus(errorText(e), true);
+  }
+  // Any fixed-port device seen connected is remembered (Wi-Fi button,
+  // Connect form, Tailscale...); saved ones not connected get a card too.
+  for (const d of devices) if (d.wireless && d.state === "device") remember(d.serial, d.model);
+  for (const x of saved) {
+    if (!devices.some((d) => d.serial === x.addr)) {
+      devices.push({ serial: x.addr, state: "saved", model: x.model, wireless: true });
+    }
   }
   const key = JSON.stringify(devices) + busySerial;
   if (force || key !== devicesKey) {
@@ -383,13 +440,23 @@ async function startMirror(dev: Device) {
   busySerial = dev.serial;
   renderDevices();
 
-  if (dev.state === "available") {
+  if (dev.state === "available" || dev.state === "saved") {
     setStatus(`Connecting to ${dev.serial}…`);
     try {
-      await invoke<string>("adb_connect", { addr: dev.serial });
+      if (dev.state === "saved") {
+        const ok = await invoke<string[]>("reconnect", { addrs: [dev.serial] });
+        if (!ok.length) throw new Error(`Couldn't reach ${dev.serial}`);
+      } else {
+        await invoke<string>("adb_connect", { addr: dev.serial });
+      }
     } catch (e) {
       busySerial = null;
-      setStatus(`${errorText(e)} – if this phone was never paired with this Mac, pair it first.`, true);
+      setStatus(
+        dev.state === "saved"
+          ? `${errorText(e)}. If the phone restarted, plug in USB and press Wi-Fi again; on Tailscale, check both devices are online.`
+          : `${errorText(e)} – if this phone was never paired with this Mac, pair it first.`,
+        true,
+      );
       await refreshDevices(true);
       return;
     }
@@ -595,10 +662,35 @@ setInterval(() => {
   fpsEl.classList.toggle("warn", delay > 300);
 }, 1000);
 
-// Poll for plugged / unplugged / discovered devices while on the connect view.
+let reconnecting = false;
+let lastReconnect = 0;
+
+/** Quietly reconnect saved addresses that aren't connected (4 s timeout each). */
+async function autoReconnect() {
+  if (reconnecting || mirroring || busySerial) return;
+  const missing = saved
+    .map((x) => x.addr)
+    .filter((a) => !devices.some((d) => d.serial === a && d.state === "device"));
+  if (!missing.length) return;
+  reconnecting = true;
+  lastReconnect = Date.now();
+  try {
+    const ok = await invoke<string[]>("reconnect", { addrs: missing });
+    if (ok.length) await refreshDevices(true);
+  } catch (e) {
+    console.warn("reconnect failed", e);
+  } finally {
+    reconnecting = false;
+  }
+}
+
+// Poll for plugged / unplugged / discovered devices while on the connect view,
+// and retry saved devices every 15 s.
 setInterval(() => {
   const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement;
-  if (!mirroring && !busySerial && !typing) refreshDevices();
+  if (mirroring || busySerial || typing) return;
+  refreshDevices();
+  if (Date.now() - lastReconnect > 15_000) autoReconnect();
 }, 3000);
 
 renderScreenOff();
@@ -606,4 +698,4 @@ applyPinned();
 if (!Player.supported()) {
   setStatus("WebCodecs VideoDecoder is not available in this WebView (needs macOS 13.3+ / Safari 16.4+).", true);
 }
-refreshDevices(true);
+refreshDevices(true).then(autoReconnect);
